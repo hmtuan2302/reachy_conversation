@@ -17,7 +17,13 @@ from reachy_demo.agent.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, LLMError, cha
 from reachy_demo.audio.player import PlayerError
 from reachy_demo.voice.speak_cli import speaker_from_env
 from reachy_demo.voice.transcribe import transcribe_stream
-from reachy_demo.voice.transcribe_cli import add_source_args, run_until_done, source_from_args
+from reachy_demo.voice.transcribe_cli import (
+    add_source_args,
+    recorded,
+    run_until_done,
+    save_recording,
+    source_from_args,
+)
 from reachy_demo.voice.tts import TTSError
 
 
@@ -96,6 +102,9 @@ def run(args: argparse.Namespace) -> int:
         model=os.environ.get("LLM_MODEL", "").strip() or DEFAULT_MODEL,
         base_url=os.environ.get("LLM_BASE_URL", "").strip() or DEFAULT_BASE_URL,
     )
+    source, rec = recorded(args, source)
     turns = transcribe_stream(source, hf_token=keys["HF_TOKEN"])
     speak = None if args.no_speak else speaker_from_env(keys["GEMINI_API_KEY"])
-    return run_until_done(converse(turns, Agent(chat), sys.stdout, speak))
+    code = run_until_done(converse(turns, Agent(chat), sys.stdout, speak))
+    save_recording(args, rec)
+    return code

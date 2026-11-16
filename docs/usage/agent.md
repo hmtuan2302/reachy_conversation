@@ -71,6 +71,21 @@ mic / stdin / file ─► speech → text ─► agent (DeepSeek) ─► termina
 4. **Speech:** when the text answer is complete, it goes to Gemini (`gemini-3.8-flash-tts`, streaming). Audio plays as it arrives (about 1 s to the first sound) and is saved to `data/speech/<date-time>-<n>.wav` when generation ends. It's saved even if playback fails.
 5. **One answer at a time.** If you finish another turn while it's answering or speaking, that turn waits and is answered next.
 
+## Debug recording (saved on exit)
+
+When you use `--mic` or `--stdin`, everything the app sent for transcription is saved when it exits: on Ctrl-C, on an error, or at the end of the input:
+
+```
+recording saved: data/recordings/20261116-091347-mic.wav
+```
+
+Use it to check what the app actually heard:
+```bash
+ffplay.exe -autoexit -nodisp "$(wslpath -w data/recordings/<file>.wav)"   # listen
+uv run reachy-demo transcribe --file data/recordings/<file>.wav            # transcribe it again
+```
+If it plays back as silence, the mic route isn't delivering sound (see the mic setup above). `--file` input isn't copied, because it's already on disk. `data/` is git-ignored. Delete old recordings yourself.
+
 ## Errors
 
 | What you see | Meaning / fix |

@@ -98,3 +98,37 @@ def test_run_stdin_streams_piped_pcm(
     assert transcribe_cli.run(_args(stdin=True)) == 0
     assert capsys.readouterr().out == "Xin chào\n"
     assert seen["audio"] == b"\x01\x00" * 10
+
+
+def test_mic_or_stdin_audio_is_saved_on_exit_even_after_ctrl_c(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    async def interrupted(pcm: AsyncIterator[bytes], **_kw: Any) -> AsyncIterator[str]:
+        async for _ in pcm:
+            pass
+        raise KeyboardInterrupt
+        yield ""
+
+    monkeypatch.setattr(transcribe_cli, "transcribe_stream", interrupted)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"\x01\x00" * 10)))
+    assert transcribe_cli.run(_args(stdin=True)) == 0
+    saved = list((tmp_path / "data" / "recordings").glob("*-stdin.wav"))
+    assert len(saved) == 1
+    with wave.open(str(saved[0]), "rb") as w:
+        assert w.readframes(w.getnframes()) == b"\x01\x00" * 10
+    assert "recording saved: data/recordings/" in capsys.readouterr().err
+
+
+def test_file_input_is_not_re_recorded(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    async def fake(pcm: AsyncIterator[bytes], **_kw: Any) -> AsyncIterator[str]:
+        async for _ in pcm:
+            pass
+        yield "hi"
+
+    monkeypatch.setattr(transcribe_cli, "transcribe_stream", fake)
+    wav_file = _wav(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert transcribe_cli.run(_args(file=wav_file)) == 0
+    assert not (tmp_path / "data" / "recordings").exists()

@@ -5,11 +5,11 @@ from __future__ import annotations
 import asyncio
 import shlex
 import time
-import wave
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-RATE = 24_000
+from reachy_demo.audio.sources import save_wav
+
 # Windows-native playback from WSL (same route as the mic); raw PCM on stdin.
 DEFAULT_PLAYER = (
     "ffplay.exe -autoexit -nodisp -loglevel error -f s16le -ar 24000 -ch_layout mono -i -"
@@ -23,14 +23,6 @@ class PlayerError(Exception):
 def speech_path(directory: Path, n: int) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     return directory / f"{time.strftime('%Y%m%d-%H%M%S')}-{n}.wav"
-
-
-def _save(path: Path, pcm: bytes) -> None:
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(RATE)
-        w.writeframes(pcm)
 
 
 async def play_and_save(
@@ -65,7 +57,7 @@ async def play_and_save(
                     problem = "player exited before the audio ended"
         finished = True
     finally:
-        _save(path, bytes(pcm))
+        save_wav(path, bytes(pcm))
         if proc:
             if finished:
                 await _finish(proc)

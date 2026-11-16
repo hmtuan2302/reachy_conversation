@@ -2,14 +2,20 @@ import io
 import sys
 import types
 import wave
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
 import pytest
 
-from reachy_demo.audio.sources import mic_chunks, stdin_chunks, to_24k_mono_pcm16, wav_chunks
+from reachy_demo.audio.sources import (
+    Recording,
+    mic_chunks,
+    stdin_chunks,
+    to_24k_mono_pcm16,
+    wav_chunks,
+)
 
 
 def _wav(path: Path, samples: np.ndarray, rate: int, width: int = 2, channels: int = 1) -> Path:
@@ -126,3 +132,24 @@ async def test_stdin_chunks_are_200ms_and_drop_odd_tail_byte() -> None:
 
 async def test_stdin_chunks_empty_input_yields_nothing() -> None:
     assert [c async for c in stdin_chunks(io.BytesIO(b""))] == []
+
+
+async def test_recording_tees_audio_and_saves_wav(tmp_path: Path) -> None:
+    rec = Recording()
+    passed = [c async for c in rec.tee(_aiter(b"\x01\x00", b"\x02\x00"))]
+    assert passed == [b"\x01\x00", b"\x02\x00"]
+    path = rec.save(tmp_path / "recordings", "mic")
+    assert path is not None and path.parent == tmp_path / "recordings"
+    assert path.name.endswith("-mic.wav")
+    with wave.open(str(path), "rb") as w:
+        assert w.getframerate() == 24000 and w.readframes(w.getnframes()) == b"\x01\x00\x02\x00"
+
+
+def test_empty_recording_saves_nothing(tmp_path: Path) -> None:
+    assert Recording().save(tmp_path, "mic") is None
+    assert list(tmp_path.iterdir()) == []
+
+
+async def _aiter(*parts: bytes) -> AsyncIterator[bytes]:
+    for p in parts:
+        yield p

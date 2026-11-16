@@ -120,6 +120,21 @@ ffmpeg -i input.mp3 -ac 1 -ar 24000 -sample_fmt s16 out.wav
 
 **Mic diagnostic for `--mic`:** `uv run python scripts/mic_check.py` shows the live level for 8 s, saves `data/mic_check.wav`, and transcribes it.
 
+## Debug recording (saved on exit)
+
+When you use `--mic` or `--stdin`, everything the app sent for transcription is saved when it exits: on Ctrl-C, on an error, or at the end of the input:
+
+```
+recording saved: data/recordings/20261116-091347-mic.wav
+```
+
+Use it to check what the app actually heard:
+```bash
+ffplay.exe -autoexit -nodisp "$(wslpath -w data/recordings/<file>.wav)"   # listen
+uv run reachy-demo transcribe --file data/recordings/<file>.wav            # transcribe it again
+```
+If it plays back as silence, the mic route isn't delivering sound (see the mic setup above). `--file` input isn't copied, because it's already on disk. `data/` is git-ignored. Delete old recordings yourself.
+
 ## Exit codes and common errors
 
 | Code | Message | Fix |

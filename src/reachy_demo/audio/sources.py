@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import wave
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -11,6 +12,36 @@ from typing import BinaryIO
 import numpy as np
 
 RATE = 24_000
+
+
+def save_wav(path: Path, pcm: bytes) -> None:
+    """Write 24 kHz mono PCM16 as a WAV file."""
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(RATE)
+        w.writeframes(pcm)
+
+
+class Recording:
+    """Keeps a copy of the audio sent for transcription, to save for debugging on exit."""
+
+    def __init__(self) -> None:
+        self.pcm = bytearray()
+
+    async def tee(self, chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+        async for chunk in chunks:
+            self.pcm += chunk
+            yield chunk
+
+    def save(self, directory: Path, label: str) -> Path | None:
+        """Write `<directory>/<YYYYmmdd-HHMMSS>-<label>.wav`; None if nothing was recorded."""
+        if not self.pcm:
+            return None
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{time.strftime('%Y%m%d-%H%M%S')}-{label}.wav"
+        save_wav(path, bytes(self.pcm))
+        return path
 
 
 def to_24k_mono_pcm16(samples: np.ndarray, rate: int) -> bytes:

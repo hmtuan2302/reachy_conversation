@@ -12,7 +12,7 @@ from typing import Any
 
 from dotenv import find_dotenv, load_dotenv
 
-from reachy_demo.audio.sources import mic_chunks, stdin_chunks, wav_chunks
+from reachy_demo.audio.sources import Recording, mic_chunks, stdin_chunks, wav_chunks
 from reachy_demo.voice.transcribe import transcribe_stream
 
 
@@ -36,6 +36,24 @@ def source_from_args(args: argparse.Namespace) -> AsyncIterator[bytes]:
     if not args.file.is_file():
         raise ValueError(f"no such file: {args.file}")
     return wav_chunks(args.file)
+
+
+RECORDINGS_DIR = Path("data/recordings")
+
+
+def recorded(
+    args: argparse.Namespace, source: AsyncIterator[bytes]
+) -> tuple[AsyncIterator[bytes], Recording | None]:
+    """Keep a copy of live input (--mic/--stdin) for debugging; a --file is already on disk."""
+    if args.file is not None:
+        return source, None
+    rec = Recording()
+    return rec.tee(source), rec
+
+
+def save_recording(args: argparse.Namespace, rec: Recording | None) -> None:
+    if rec and (path := rec.save(RECORDINGS_DIR, "mic" if args.mic else "stdin")):
+        print(f"recording saved: {path}", file=sys.stderr)
 
 
 def run_until_done(main: Coroutine[Any, Any, None]) -> int:
@@ -74,4 +92,7 @@ def run(args: argparse.Namespace) -> int:
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
-    return run_until_done(_print_lines(transcribe_stream(source, hf_token=token)))
+    source, rec = recorded(args, source)
+    code = run_until_done(_print_lines(transcribe_stream(source, hf_token=token)))
+    save_recording(args, rec)  # also after Ctrl-C or an error: that's when it's most useful
+    return code
