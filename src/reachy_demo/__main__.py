@@ -7,6 +7,7 @@ import logging
 import sys
 
 from reachy_demo import __version__
+from reachy_demo.agent import cli as agent_cli
 from reachy_demo.config import Config, ConfigError
 from reachy_demo.ops.logging import configure_logging
 from reachy_demo.voice import transcribe_cli
@@ -20,9 +21,12 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True, help="per milestone")
     sub.add_parser("check-config", help="validate .env / environment")
     transcribe_cli.add_parser(sub)
+    agent_cli.add_parser(sub)
     args = parser.parse_args(argv)
     if args.command == "transcribe":
         return transcribe_cli.run(args)  # needs only HF_TOKEN, not the robot config
+    if args.command == "agent":
+        return agent_cli.run(args)  # HF_TOKEN + DEEPSEEK_API_KEY, not the robot config
 
     try:
         cfg = Config.from_env()

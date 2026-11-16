@@ -1,5 +1,7 @@
 # 05 — Agent, tools and memory (F1, F3, F5, F8, F9, F10)
 
+> **Update 2026-11-16:** the owner chose a **pipeline** (speech → text → LLM → text → speech) instead of the speech-to-speech Realtime model in §1. Stage 1 is built: `reachy-demo agent` (S2T on the Reachy HF server, which decides the end of turn; DeepSeek as the LLM; text out). See `docs/superpowers/specs/2026-11-16-voice-agent-design.md` and `docs/usage/agent.md`. The tool layer, permissions and memory below still apply; they plug into `agent/agent.py` when tools are added.
+
 ## 1. Agent model
 
 The "agent" is the OpenAI Realtime model plus a tool registry. The app does not run a second planner: the model decides which tool to call, while code enforces permission, timeouts and side effects **[arch]**. Multi-step tasks (search → confirm → look → report) live *inside* one tool, so the model stays out of tight loops and latency stays bounded.
