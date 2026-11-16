@@ -27,7 +27,15 @@ If you've run `huggingface-cli login`, the token is in `~/.cache/huggingface/tok
 
 **Run commands from the repo folder.** `.env` is read from the folder you run the command in.
 
-**WSL2 mic:** WSL2 reaches the Windows mic through WSLg's PulseAudio. If `--mic` says `cannot open microphone`, check that `pactl info` works and that Windows lets apps use the microphone (Settings → Privacy → Microphone).
+**WSL2 mic (one-time):** WSL2 reaches the Windows mic through WSLg's PulseAudio server (`/mnt/wslg/PulseServer`). PortAudio only uses ALSA, so install the ALSA→Pulse bridge and make it the default. Without it, `--mic` fails with `cannot open microphone: Error querying device -1`.
+
+```bash
+sudo apt install -y libasound2-plugins
+printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > ~/.asoundrc
+uv run python -c "import sounddevice as sd; print(sd.query_devices())"   # must list "default"
+```
+
+If it still fails, allow microphone access for apps in Windows (Settings → Privacy & security → Microphone), then run `wsl --shutdown` from Windows and reopen the terminal.
 
 ## Use
 
@@ -66,7 +74,7 @@ ffmpeg -i input.mp3 -ac 1 -ar 24000 -sample_fmt s16 out.wav
 | 2 | `no such file` | Check the path |
 | 2 | `need 16-bit PCM WAV` / `not a readable WAV file` | Convert with ffmpeg (above) |
 | 2 | `install the mic extra` | `uv sync --extra mic` |
-| 2 | `cannot open microphone` | Check the mic / WSL audio (see Setup) |
+| 2 | `cannot open microphone: Error querying device -1` | No input device visible. On WSL2, do the mic setup above |
 | 1 | `session allocator returned 401 ... token_invalid` | The token is wrong or expired. Make a new one on huggingface.co → Settings → Access Tokens |
 | 1 | `transcription connection failed` / `socket closed` | Network or server problem. Retry |
 
