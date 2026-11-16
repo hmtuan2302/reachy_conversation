@@ -1,3 +1,4 @@
+import io
 import sys
 import types
 import wave
@@ -8,7 +9,7 @@ from typing import Any, cast
 import numpy as np
 import pytest
 
-from reachy_demo.audio.sources import mic_chunks, to_24k_mono_pcm16, wav_chunks
+from reachy_demo.audio.sources import mic_chunks, stdin_chunks, to_24k_mono_pcm16, wav_chunks
 
 
 def _wav(path: Path, samples: np.ndarray, rate: int, width: int = 2, channels: int = 1) -> Path:
@@ -115,3 +116,13 @@ async def test_mic_start_failure_is_runtime_error(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setitem(sys.modules, "sounddevice", fake)
     with pytest.raises(RuntimeError, match="cannot open microphone.*timed out"):
         [c async for c in mic_chunks()]
+
+
+async def test_stdin_chunks_are_200ms_and_drop_odd_tail_byte() -> None:
+    raw = io.BytesIO(b"\x01\x00" * 7200 + b"\x07")  # 0.3 s of PCM + a stray byte
+    chunks = [c async for c in stdin_chunks(raw)]
+    assert [len(c) for c in chunks] == [9600, 4800]
+
+
+async def test_stdin_chunks_empty_input_yields_nothing() -> None:
+    assert [c async for c in stdin_chunks(io.BytesIO(b""))] == []

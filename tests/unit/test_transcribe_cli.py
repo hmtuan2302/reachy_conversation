@@ -1,4 +1,6 @@
 import argparse
+import io
+import sys
 import wave
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -9,8 +11,8 @@ import pytest
 from reachy_demo.voice import transcribe_cli
 
 
-def _args(file: Path | None = None, mic: bool = False) -> argparse.Namespace:
-    return argparse.Namespace(file=file, mic=mic)
+def _args(file: Path | None = None, mic: bool = False, stdin: bool = False) -> argparse.Namespace:
+    return argparse.Namespace(file=file, mic=mic, stdin=stdin)
 
 
 def _wav(tmp_path: Path) -> Path:
@@ -80,3 +82,19 @@ def test_run_connection_error_returns_1(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
     monkeypatch.setattr(transcribe_cli, "transcribe_stream", boom)
     assert transcribe_cli.run(_args(file=_wav(tmp_path))) == 1
+
+
+def test_run_stdin_streams_piped_pcm(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: dict[str, bytes] = {}
+
+    async def fake(pcm: AsyncIterator[bytes], **_kw: Any) -> AsyncIterator[str]:
+        seen["audio"] = b"".join([c async for c in pcm])
+        yield "Xin chào"
+
+    monkeypatch.setattr(transcribe_cli, "transcribe_stream", fake)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"\x01\x00" * 10)))
+    assert transcribe_cli.run(_args(stdin=True)) == 0
+    assert capsys.readouterr().out == "Xin chào\n"
+    assert seen["audio"] == b"\x01\x00" * 10

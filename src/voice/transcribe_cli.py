@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dotenv import find_dotenv, load_dotenv
 
-from reachy_demo.audio.sources import mic_chunks, wav_chunks
+from reachy_demo.audio.sources import mic_chunks, stdin_chunks, wav_chunks
 from reachy_demo.voice.transcribe import transcribe_stream
 
 
@@ -20,6 +20,11 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--mic", action="store_true", help="laptop microphone (needs --extra mic)")
     src.add_argument("--file", type=Path, help="16-bit PCM WAV")
+    src.add_argument(
+        "--stdin",
+        action="store_true",
+        help="raw 24 kHz mono s16le PCM piped in (e.g. from Windows ffmpeg.exe)",
+    )
 
 
 async def _print_lines(lines: AsyncIterator[str]) -> None:
@@ -36,7 +41,12 @@ def run(args: argparse.Namespace) -> int:
     if args.file is not None and not args.file.is_file():
         print(f"error: no such file: {args.file}", file=sys.stderr)
         return 2
-    source = mic_chunks() if args.mic else wav_chunks(args.file)
+    if args.stdin:
+        source = stdin_chunks(sys.stdin.buffer)
+    elif args.mic:
+        source = mic_chunks()
+    else:
+        source = wav_chunks(args.file)
     try:
         asyncio.run(_print_lines(transcribe_stream(source, hf_token=token)))
     except KeyboardInterrupt:

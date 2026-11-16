@@ -27,7 +27,7 @@ If you've run `huggingface-cli login`, the token is in `~/.cache/huggingface/tok
 
 **Run commands from the repo folder.** `.env` is read from the folder you run the command in.
 
-**WSL2 mic (one-time):** WSL2 reaches the Windows mic through WSLg's PulseAudio server (`/mnt/wslg/PulseServer`). PortAudio only uses ALSA, so install the ALSA→Pulse bridge and make it the default. Without it, `--mic` fails with `cannot open microphone: Error querying device -1`.
+**WSL2 `--mic` (one-time; not needed for `--stdin`):** WSL2 reaches the Windows mic through WSLg's PulseAudio server (`/mnt/wslg/PulseServer`). PortAudio only uses ALSA, so install the ALSA→Pulse bridge and make it the default. Without it, `--mic` fails with `cannot open microphone: Error querying device -1`.
 
 ```bash
 sudo apt install -y libasound2-plugins
@@ -65,10 +65,41 @@ uv run reachy-demo transcribe --file meeting.wav > meeting.txt   # save to a fil
 
 | Option | Meaning |
 |---|---|
-| `--mic` | Laptop default microphone |
+| `--mic` | Default mic as seen by WSL (through WSLg) |
+| `--stdin` | Raw 24 kHz mono 16-bit PCM piped in. Best quality on WSL; see below |
 | `--file PATH` | WAV file: 16-bit PCM, any sample rate, mono or stereo |
 
-Use either `--mic` or `--file`, not both.
+Use exactly one of `--mic`, `--stdin`, `--file`.
+
+## Best quality on WSL: record in Windows, pipe into WSL
+
+`--mic` goes through WSLg's PulseAudio bridge. To skip it, let Windows ffmpeg read the mic directly (DirectShow) and pipe raw PCM into the app. You don't need the ALSA, Pulse or `.asoundrc` setup for this.
+
+1. Install ffmpeg on **Windows** once: `winget install Gyan.FFmpeg.Essentials`. Then open a new WSL terminal, and `which ffmpeg.exe` should find it.
+2. Find your mic's exact name:
+   ```bash
+   ffmpeg.exe -hide_banner -list_devices true -f dshow -i dummy 2>&1 | grep '(audio)'
+   # "Headset (soundcore R60i NC)" (audio)
+   ```
+3. Transcribe:
+   ```bash
+   ffmpeg.exe -hide_banner -loglevel error -f dshow -audio_buffer_size 50 \
+     -i audio="Headset (soundcore R60i NC)" -ac 1 -ar 24000 -f s16le - \
+     | uv run reachy-demo transcribe --stdin
+   ```
+   Press Ctrl-C to stop. `-audio_buffer_size 50` keeps the delay low (50 ms instead of DirectShow's default 500 ms).
+
+**Check that the mic isn't silent** (speak during the 3 s):
+```bash
+ffmpeg.exe -hide_banner -loglevel error -f dshow -i audio="Headset (soundcore R60i NC)" -t 3 -ac 1 -ar 24000 -f s16le - \
+  | uv run python -c "import sys,numpy as n; x=n.frombuffer(sys.stdin.buffer.read(),'<i2').astype(float); print('rms',round(float(n.sqrt((x**2).mean())))) "
+```
+Speech is usually rms > 300. **rms near 0 means Windows is giving apps silence.** Fix it in Windows:
+- Settings → Privacy & security → Microphone: turn on **Microphone access**, **Let apps access your microphone** and **Let desktop apps access your microphone**. Blocked apps get silence, not an error.
+- Settings → System → Sound → your headset → Input: check that it isn't muted, the volume is up, and the test bar moves when you speak.
+- Bluetooth: the headset's mic only works in its "Headset"/hands-free mode. Use the "Headset (...)" device, not "Headphones (...)".
+
+Or pipe any other source the same way, e.g. a file with Linux ffmpeg: `ffmpeg -re -i talk.mp3 -ac 1 -ar 24000 -f s16le - | uv run reachy-demo transcribe --stdin`.
 
 ## Converting other audio formats
 
@@ -77,6 +108,8 @@ Only 16-bit PCM WAV is accepted. To convert mp3, m4a or other formats, use ffmpe
 ```bash
 ffmpeg -i input.mp3 -ac 1 -ar 24000 -sample_fmt s16 out.wav
 ```
+
+**Mic diagnostic for `--mic`:** `uv run python scripts/mic_check.py` shows the live level for 8 s, saves `data/mic_check.wav`, and transcribes it.
 
 ## Exit codes and common errors
 

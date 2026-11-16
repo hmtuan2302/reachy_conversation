@@ -6,6 +6,7 @@ import asyncio
 import wave
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import BinaryIO
 
 import numpy as np
 
@@ -41,6 +42,14 @@ async def wav_chunks(
         yield pcm[i : i + step]
         if realtime:
             await asyncio.sleep(chunk_ms / 1000)
+
+
+async def stdin_chunks(stream: BinaryIO, *, chunk_ms: int = 200) -> AsyncIterator[bytes]:
+    """Raw 24 kHz mono s16le PCM from a pipe (e.g. Windows ffmpeg.exe -f s16le -), until EOF."""
+    step = RATE * 2 * chunk_ms // 1000
+    while chunk := await asyncio.to_thread(stream.read, step):
+        if usable := chunk[: len(chunk) // 2 * 2]:  # a half sample can only be the stream's tail
+            yield usable
 
 
 async def mic_chunks(*, chunk_ms: int = 200) -> AsyncIterator[bytes]:
