@@ -31,6 +31,7 @@ build-backend = "hatchling.build"
 packages = ["src/reachy_demo"]
 
 [tool.ruff]
+extend-exclude = ["reference"]   # third-party code kept verbatim for porting
 line-length = 100
 target-version = "py312"
 

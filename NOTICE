@@ -1,0 +1,5 @@
+reachy-demo
+
+This repository includes code copied from (reference/) or derived from (ported
+tools) reachy_mini_conversation_app by Pollen Robotics, licensed under the
+Apache License, Version 2.0. See reference/LICENSE.reachy_mini_conversation_app.
