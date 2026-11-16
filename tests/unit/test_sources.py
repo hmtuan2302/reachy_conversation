@@ -1,10 +1,12 @@
+import sys
+import types
 import wave
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from reachy_demo.audio.sources import to_24k_mono_pcm16, wav_chunks
+from reachy_demo.audio.sources import mic_chunks, to_24k_mono_pcm16, wav_chunks
 
 
 def _wav(path: Path, samples: np.ndarray, rate: int, width: int = 2, channels: int = 1) -> Path:
@@ -42,3 +44,24 @@ async def test_8bit_wav_rejected(tmp_path: Path) -> None:
     path = _wav(tmp_path / "b.wav", np.zeros(100, dtype=np.uint8), 16000, width=1)
     with pytest.raises(ValueError, match="16-bit"):
         [c async for c in wav_chunks(path, realtime=False)]
+
+
+@pytest.mark.parametrize("content", [b"", b"not a wav file"])
+async def test_non_wav_file_rejected(tmp_path: Path, content: bytes) -> None:
+    path = tmp_path / "x.wav"
+    path.write_bytes(content)
+    with pytest.raises(ValueError, match="x.wav"):
+        [c async for c in wav_chunks(path, realtime=False)]
+
+
+async def test_mic_open_failure_is_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class PortAudioError(Exception):
+        pass
+
+    def refuse(**_kw: object) -> None:
+        raise PortAudioError("Invalid sample rate")
+
+    fake = types.SimpleNamespace(PortAudioError=PortAudioError, RawInputStream=refuse)
+    monkeypatch.setitem(sys.modules, "sounddevice", fake)
+    with pytest.raises(RuntimeError, match="sample rate"):
+        [c async for c in mic_chunks()]

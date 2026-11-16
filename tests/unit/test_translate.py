@@ -1,10 +1,13 @@
+import asyncio
 import base64
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
+from http import HTTPStatus
 from typing import Any
 
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
+from websockets.http11 import Request, Response
 
 from reachy_demo.voice.translate import translate_stream
 
@@ -75,4 +78,47 @@ async def test_ws_close_mid_stream_raises_connection_error() -> None:
         await ws.close(code=1011)
 
     with pytest.raises(ConnectionError):
+        await _run(handler)
+
+
+async def _bad_source() -> AsyncIterator[bytes]:
+    yield b"\x00\x00"
+    raise ValueError("need 16-bit PCM WAV")
+
+
+async def test_source_error_surfaces_without_hang() -> None:
+    async def silent(ws: ServerConnection) -> None:
+        async for _ in ws:
+            pass
+
+    async with serve(silent, "127.0.0.1", 0) as server:
+        url = f"ws://127.0.0.1:{next(iter(server.sockets)).getsockname()[1]}"
+        with pytest.raises(ValueError, match="16-bit"):
+            async with asyncio.timeout(2):
+                async for _ in translate_stream(_bad_source(), api_key="k", target="en", url=url):
+                    pass
+
+
+async def test_handshake_rejected_raises_connection_error() -> None:
+    def reject(conn: ServerConnection, _req: Request) -> Response:
+        return conn.respond(HTTPStatus.UNAUTHORIZED, "bad key\n")
+
+    async def never(ws: ServerConnection) -> None:
+        pass
+
+    async with serve(never, "127.0.0.1", 0, process_request=reject) as server:
+        url = f"ws://127.0.0.1:{next(iter(server.sockets)).getsockname()[1]}"
+        with pytest.raises(ConnectionError, match="401"):
+            async for _ in translate_stream(_chunks(b""), api_key="k", target="en", url=url):
+                pass
+
+
+async def test_server_error_message_reaches_connection_error() -> None:
+    async def handler(ws: ServerConnection) -> None:
+        await ws.recv()
+        err = {"type": "error", "error": {"message": "invalid model"}}
+        await ws.send(json.dumps(err))
+        await ws.close()
+
+    with pytest.raises(ConnectionError, match="invalid model"):
         await _run(handler)

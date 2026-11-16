@@ -27,11 +27,14 @@ def to_24k_mono_pcm16(samples: np.ndarray, rate: int) -> bytes:
 async def wav_chunks(
     path: Path, *, realtime: bool = True, chunk_ms: int = 200
 ) -> AsyncIterator[bytes]:
-    with wave.open(str(path), "rb") as w:
-        if w.getsampwidth() != 2 or w.getcomptype() != "NONE":
-            raise ValueError(f"{path}: need 16-bit PCM WAV, got {8 * w.getsampwidth()}-bit")
-        rate, channels = w.getframerate(), w.getnchannels()
-        frames = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
+    try:
+        with wave.open(str(path), "rb") as w:
+            if w.getsampwidth() != 2 or w.getcomptype() != "NONE":
+                raise ValueError(f"{path}: need 16-bit PCM WAV, got {8 * w.getsampwidth()}-bit")
+            rate, channels = w.getframerate(), w.getnchannels()
+            frames = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
+    except (wave.Error, EOFError) as e:
+        raise ValueError(f"{path}: not a readable WAV file ({e or 'empty'})") from e
     pcm = to_24k_mono_pcm16(frames.reshape(-1, channels), rate)
     step = RATE * 2 * chunk_ms // 1000
     for i in range(0, len(pcm), step):
@@ -51,13 +54,16 @@ async def mic_chunks(*, chunk_ms: int = 200) -> AsyncIterator[bytes]:
     def on_audio(data: bytes, _frames: int, _time: object, _status: object) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, bytes(data))
 
-    stream = sd.RawInputStream(
-        samplerate=RATE,
-        channels=1,
-        dtype="int16",
-        blocksize=RATE * chunk_ms // 1000,
-        callback=on_audio,
-    )
+    try:
+        stream = sd.RawInputStream(
+            samplerate=RATE,
+            channels=1,
+            dtype="int16",
+            blocksize=RATE * chunk_ms // 1000,
+            callback=on_audio,
+        )
+    except sd.PortAudioError as e:
+        raise RuntimeError(f"cannot open microphone: {e}") from e
     with stream:
         while True:
             yield await queue.get()
