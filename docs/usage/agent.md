@@ -69,7 +69,25 @@ mic / stdin / file ─► speech → text ─► agent (DeepSeek) ─► termina
 2. **The agent** sends a short system prompt, the last 10 Q/A pairs and your question to DeepSeek, and prints the answer as it streams (about 0.5 s to the first word).
 3. **Style:** it answers in your language (Vietnamese or English), in at most 3 sentences unless you ask for more, as plain text with no markdown (so it can be spoken later), and it says when it isn't sure.
 4. **Speech:** when the text answer is complete, it goes to Gemini (`gemini-3.8-flash-tts`, streaming). Audio plays as it arrives (about 1 s to the first sound) and is saved to `data/speech/<date-time>-<n>.wav` when generation ends. It's saved even if playback fails.
-5. **One answer at a time.** If you finish another turn while it's answering or speaking, that turn waits and is answered next.
+5. **One answer at a time.** While Reachy is answering or speaking, only a stop command does anything (see below). Anything else you say then is ignored, not answered later.
+
+## Interrupting
+
+While Reachy answers, the mic keeps listening.
+
+- **You start talking:** playback drops to 25% volume about 0.2 s later and comes back when you stop. Nothing is cancelled yet.
+- **You say a stop command:** "stop", "wait", "enough", "dừng lại", "thôi", or any phrasing. The answer is cancelled (text and speech), queued audio is flushed, and Reachy listens again:
+  ```
+  you: Tell me about the history of Hanoi.
+  bot: Hanoi has been ...
+    (stopped)
+  ```
+- **"Stop, <question>":** it stops, then answers the question: `stop, what time is it?`
+- **Anything else** said while Reachy talks (fillers, side talk, a question without a stop word) is dropped and shown as `  (ignored: …)` after the answer.
+
+The stop takes effect after you finish the sentence: turn end (about 0.5–1.2 s) plus the stop check by DeepSeek (about 0.3–0.5 s). Reachy stays at 25% volume meanwhile. A short tail (about 0.2 s) that already reached the speaker can still be heard. If the stop check fails or takes over 2 s, it doesn't stop.
+
+Tune when it ducks with `VAD_RMS` in `.env` (default 500). `uv run python scripts/mic_check.py` prints your mic's `rms`: set `VAD_RMS` above the noise level and below your speech. A headset avoids Reachy hearing itself.
 
 ## Debug recording (saved on exit)
 

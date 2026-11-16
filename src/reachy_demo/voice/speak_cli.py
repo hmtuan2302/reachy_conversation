@@ -24,7 +24,9 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     p.add_argument("text", nargs="+", help="what to say")
 
 
-def speaker_from_env(api_key: str) -> Callable[[str], Coroutine[Any, Any, Path]]:
+def speaker_from_env(
+    api_key: str, gain: Callable[[], float] | None = None
+) -> Callable[[str], Coroutine[Any, Any, Path]]:
     """speak(text) -> saved WAV path. Raises TTSError / PlayerError (audio saved for the latter)."""
     model = os.environ.get("TTS_MODEL", "").strip() or DEFAULT_TTS_MODEL
     voice = os.environ.get("TTS_VOICE", "").strip() or DEFAULT_VOICE
@@ -35,7 +37,7 @@ def speaker_from_env(api_key: str) -> Callable[[str], Coroutine[Any, Any, Path]]
     async def speak(text: str) -> Path:
         chunks = speak_stream(text, api_key=api_key, model=model, voice=voice)
         path = speech_path(SPEECH_DIR, next(counter))
-        return await play_and_save(chunks, path=path, player_cmd=player_cmd)
+        return await play_and_save(chunks, path=path, player_cmd=player_cmd, gain=gain)
 
     return speak
 

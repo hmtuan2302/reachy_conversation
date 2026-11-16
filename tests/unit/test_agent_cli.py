@@ -8,6 +8,7 @@ import pytest
 
 from reachy_demo.agent import cli
 from reachy_demo.agent.agent import Agent
+from reachy_demo.agent.intent import Intent
 from reachy_demo.agent.llm import LLMError
 from reachy_demo.voice.tts import TTSError
 
@@ -131,3 +132,86 @@ def test_run_needs_gemini_key_only_when_speaking(
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     assert cli.run(_args(no_speak=False)) == 2
     assert "GEMINI_API_KEY" in capsys.readouterr().err
+
+
+def _classify(table: dict[str, Intent], calls: list[str] | None = None):  # type: ignore[no-untyped-def]
+    async def classify(text: str) -> Intent:
+        if calls is not None:
+            calls.append(text)
+        return table.get(text, Intent(False, ""))
+
+    return classify
+
+
+async def _timed(*items: tuple[float, str]) -> AsyncIterator[str]:
+    for delay, text in items:
+        await asyncio.sleep(delay)
+        yield text
+
+
+async def test_stop_mid_answer_cancels_and_answers_rest() -> None:
+    out = io.StringIO()
+    cls = _classify({"stop, B": Intent(True, "B")})
+    await cli.converse(_turns("A", "stop, B"), _agent(delay=0.2), out, classify=cls)
+    assert out.getvalue() == "you: A\nbot: \n  (stopped)\nyou: B\nbot: b1\n"
+
+
+async def test_stop_alone_answers_nothing() -> None:
+    out = io.StringIO()
+    cls = _classify({"stop": Intent(True, "")})
+    await cli.converse(_turns("A", "stop"), _agent(delay=0.2), out, classify=cls)
+    assert out.getvalue() == "you: A\nbot: \n  (stopped)\n"
+
+
+async def test_non_stop_mid_answer_is_dropped() -> None:
+    out = io.StringIO()
+    await cli.converse(_turns("A", "hmm"), _agent(delay=0.1), out, classify=_classify({}))
+    assert out.getvalue() == "you: A\nbot: a1\n  (ignored: hmm)\n"
+
+
+async def test_ignored_then_stop() -> None:
+    out = io.StringIO()
+    cls = _classify({"stop": Intent(True, "")})
+    await cli.converse(_turns("A", "hmm", "stop"), _agent(delay=0.2), out, classify=cls)
+    assert out.getvalue() == "you: A\nbot: \n  (stopped)\n"
+
+
+async def test_idle_turn_is_not_classified() -> None:
+    out, calls = io.StringIO(), list[str]()
+    turns = _timed((0, "A"), (0.1, "B"))
+    await cli.converse(turns, _agent(), out, classify=_classify({}, calls))
+    assert calls == []
+    assert out.getvalue() == "you: A\nbot: a1\nyou: B\nbot: b1\n"
+
+
+async def test_stop_during_speech_cancels_speak() -> None:
+    state: list[str] = []
+
+    async def speak(text: str) -> None:
+        state.append("started")
+        await asyncio.sleep(1)
+        state.append("finished")
+
+    out = io.StringIO()
+    cls = _classify({"stop": Intent(True, "")})
+    turns = _timed((0, "A"), (0.1, "stop"))
+    await cli.converse(turns, _agent(), out, speak=speak, classify=cls)
+    await asyncio.sleep(0.05)  # anything still running from the old answer would act now
+    assert state == ["started"]
+    assert out.getvalue() == "you: A\nbot: a1\n  (stopped)\n"
+
+
+async def test_input_end_waits_for_running_answer() -> None:
+    out = io.StringIO()
+    await cli.converse(_turns("A"), _agent(delay=0.1), out, classify=_classify({}))
+    assert out.getvalue() == "you: A\nbot: a1\n"
+
+
+async def test_cancelled_answer_not_in_history() -> None:
+    agent = _agent(delay=0.2)
+    cls = _classify({"stop, B": Intent(True, "B")})
+    await cli.converse(_turns("A", "stop, B"), agent, io.StringIO(), classify=cls)
+    assert agent.history == [
+        {"role": "user", "content": "B"},
+        {"role": "assistant", "content": "b1"},
+    ]
