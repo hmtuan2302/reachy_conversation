@@ -2,4 +2,4 @@
 
 Usage docs per feature: [docs/usage/](docs/usage/)
 
-- [Live translate (mic / WAV)](docs/usage/translate.md)
+- [Live transcribe: speech → text (mic / WAV)](docs/usage/transcribe.md)

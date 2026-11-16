@@ -1,4 +1,4 @@
-"""Audio sources for the translate tool: WAV file or laptop mic, as 24 kHz mono PCM16 chunks."""
+"""Audio sources for live transcription: WAV file or laptop mic, as 24 kHz mono PCM16 chunks."""
 
 from __future__ import annotations
 

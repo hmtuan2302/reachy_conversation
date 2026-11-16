@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 
 class ConfigError(Exception):
@@ -33,7 +33,7 @@ class Config:
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Config:
         if env is None:
-            load_dotenv()
+            load_dotenv(find_dotenv(usecwd=True))  # .env of the folder you run from
         src: Mapping[str, str] = os.environ if env is None else env
         errors: list[str] = []
 
