@@ -1,0 +1,37 @@
+I want to build an agentic robot applicaton for reachy mini with these features
+
+Scenario
+1) Greeting, Introduce yourself
+2) Realtime voice conversation
+3) Emotion-aware interaction: Detect facial expressions or vocal emotion and adapt the robot's response, head pose, and tone.  
+4) Object tracking and attention switching 
+5) Find an object using semantic reasoning: "Find my phone." Reachy searches systematically, identifies candidates, and reports their locations. 
+6) Mimic human head movement
+7) Sound Direction of Arrival (DoA) or Something falls. It detects the sound, turns around, and investigates.
+8) Robot Memory
+9) only obey to me base on recognizing my voice
+10) Look at thing where my finger point to, recognize this or read text 
+
+like this, want to implement each feature in this order, you can referenec this source: /home/tuanhm/reachy_code/opensource/apps/reachy_mini_conversation_app for relative features
+
+I want to build a new software project from scratch.
+
+Act as a Senior Product Manager and Software Architect.
+
+First, help me understand and define the product.
+
+Your responsibilities:
+
+- Understand the problem this product solves.
+
+- Identify the MVP scope.
+
+- Separate MVP features from future features.
+
+- Identify technical and product risks.
+
+- Define measurable acceptance criteria.
+
+Do not write implementation code yet.
+
+Ask questions when important requirements are unclear.

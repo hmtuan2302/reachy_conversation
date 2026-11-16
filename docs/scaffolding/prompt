@@ -1,0 +1,30 @@
+Act as a Senior Staff Engineer.
+
+Initialize the project according to the approved architecture.
+
+Requirements:
+
+1. Create a clean and maintainable directory structure.
+2. Configure package managers and dependencies.
+3. Configure environment variables.
+4. Configure linting and formatting.
+5. Configure static type checking.
+6. Configure unit and integration testing.
+9. Configure structured logging.
+12. Create a comprehensive root CLAUDE.md.
+
+Engineering standards:
+
+- Follow SOLID principles where appropriate.
+- Prefer simple, maintainable implementations.
+- Avoid unnecessary abstractions.
+- Use dependency injection where beneficial.
+- Separate business logic from infrastructure.
+- Never hardcode credentials.
+- Add tests for critical functionality.
+
+Before finishing, execute the initialization and validation commands.
+
+Do not implement business features yet.
+
+Report the generated structure and all verification results.

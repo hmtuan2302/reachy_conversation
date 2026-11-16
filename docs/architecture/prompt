@@ -1,0 +1,19 @@
+Act as a Principal Software Architect.
+
+Based on the approved requirements, design a production-ready architecture.
+
+Tasks:
+
+- Evaluate suitable technology stacks.
+
+- Compare alternatives and explain trade-offs.
+
+- Design the high-level architecture.
+
+- Define service boundaries and responsibilities.
+
+
+Do not implement the system yet.
+
+
+Explain important architectural decisions and their trade-offs.
