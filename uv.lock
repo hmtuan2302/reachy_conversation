@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = "==3.12.*"
 
 [[package]]
@@ -1371,6 +1371,7 @@ perception = [
 ]
 robot = [
     { name = "reachy-mini" },
+    { name = "reachy-mini-dances-library" },
 ]
 speaker = [
     { name = "sherpa-onnx" },
@@ -1394,6 +1395,7 @@ requires-dist = [
     { name = "opencv-python-headless", marker = "extra == 'perception'", specifier = ">=4.10" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "reachy-mini", marker = "extra == 'robot'", specifier = ">=1.13" },
+    { name = "reachy-mini-dances-library", marker = "extra == 'robot'", specifier = ">=0.2.1" },
     { name = "sherpa-onnx", marker = "extra == 'speaker'", specifier = ">=1.10" },
     { name = "sounddevice", marker = "extra == 'mic'", specifier = ">=0.5" },
     { name = "websockets", specifier = ">=14" },
@@ -1451,6 +1453,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5b/6a/47fc7e63e17e12f8bd468d7d4544fb5c14e37fb6ad2dc01726f278aed1d6/reachy_mini-1.14.0.tar.gz", hash = "sha256:f0afe6e378009113651b82b99ac9a54d3cdd20666bb00ce38641aac27e51c2fc", size = 23971410, upload-time = "2026-11-05T13:08:23.943Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/c3/d730d3cc35db95e189238056ca8fa18e4f208b7b8ca5eb1147cbbc9ae113/reachy_mini-1.14.0-py3-none-any.whl", hash = "sha256:7fc5fb12d209d59ee053590ac43f13ee712c9906793b00f733bef67f554f77b9", size = 24065982, upload-time = "2026-11-05T13:08:20.039Z" },
+]
+
+[[package]]
+name = "reachy-mini-dances-library"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "reachy-mini" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/0e/7b26c96caf905e8e0cedff57251da4f953b1c2b97a611c86aee76318f5d1/reachy_mini_dances_library-0.2.1.tar.gz", hash = "sha256:f63fbb0e27f97c547f4e4487e8491495365b24c6f0d063780ef1da9fa5b1daf1", size = 14022, upload-time = "2025-10-15T16:09:00.965Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e2/52/69d2d0434019e72811f77bfe408e6781a8bee10639e480d9d6ac1b745f81/reachy_mini_dances_library-0.2.1-py3-none-any.whl", hash = "sha256:b3b2028dd92648b70c262535e9b77aa481a0a3dcf6f2ceece84c08b725cbbddf", size = 16159, upload-time = "2025-10-15T16:08:59.673Z" },
 ]
 
 [[package]]

@@ -12,7 +12,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-robot = ["reachy-mini>=1.13"]            # SDK; needs GStreamer on the host (see docs/architecture/06-operations.md)
+robot = [
+    "reachy-mini>=1.13",                 # SDK; needs GStreamer on the host (see docs/architecture/06-operations.md)
+    "reachy-mini-dances-library>=0.2.1", # dance moves for the `dance` tool (Pollen Robotics)
+]
 perception = ["mediapipe>=0.10", "opencv-python-headless>=4.10"]
 speaker = ["sherpa-onnx>=1.10"]          # speaker-embedding gate
 mic = ["sounddevice>=0.5"]               # laptop mic for `translate --mic`
@@ -48,7 +51,7 @@ strict = true
 files = ["src/reachy_demo", "tests"]
 # SDK / model libs ship without stubs
 [[tool.mypy.overrides]]
-module = ["reachy_mini.*", "mediapipe.*", "cv2.*", "sherpa_onnx.*", "onnxruntime.*", "sounddevice.*"]
+module = ["reachy_mini.*", "reachy_mini_dances_library.*", "mediapipe.*", "cv2.*", "sherpa_onnx.*", "onnxruntime.*", "sounddevice.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

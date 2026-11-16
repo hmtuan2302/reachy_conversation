@@ -3,3 +3,7 @@ reachy-demo
 This repository includes code copied from (reference/) or derived from (ported
 tools) reachy_mini_conversation_app by Pollen Robotics, licensed under the
 Apache License, Version 2.0. See reference/LICENSE.reachy_mini_conversation_app.
+
+The `dance` tool plays moves from reachy_mini_dances_library by Pollen Robotics
+(Apache License, Version 2.0), installed as a dependency of the `robot` extra,
+not copied.

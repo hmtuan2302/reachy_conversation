@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -19,6 +21,13 @@ class LLMError(Exception):
     """The LLM call failed (HTTP status, auth, network, or a malformed stream)."""
 
 
+@dataclass(frozen=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: str  # raw JSON text, as the model wrote it
+
+
 async def chat_stream(
     messages: list[dict[str, str]],
     *,
@@ -28,8 +37,28 @@ async def chat_stream(
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> AsyncIterator[str]:
     """Yield answer text pieces as they stream in."""
+    async for piece in chat_events(
+        messages, api_key=api_key, model=model, base_url=base_url, transport=transport
+    ):
+        if isinstance(piece, str):
+            yield piece
+
+
+async def chat_events(
+    messages: list[dict[str, Any]],
+    *,
+    api_key: str,
+    tools: list[dict[str, Any]] | None = None,
+    model: str = DEFAULT_MODEL,
+    base_url: str = DEFAULT_BASE_URL,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> AsyncIterator[str | ToolCall]:
+    """Yield text pieces as they stream in, then any tool calls once the stream ends."""
     url = f"{base_url.rstrip('/')}/chat/completions"
-    body = {"model": model, "messages": messages, "stream": True}
+    body: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    if tools:
+        body["tools"] = tools
+    calls: dict[int, dict[str, str]] = {}  # tool calls stream as fragments, keyed by index
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
         async with (
@@ -44,11 +73,22 @@ async def chat_stream(
                     continue  # blank separators and ": keep-alive" comments
                 data = line[len("data: ") :]
                 if data == "[DONE]":
-                    return
+                    break
                 choices = json.loads(data).get("choices") or [{}]
-                if text := (choices[0].get("delta") or {}).get("content"):
+                delta = choices[0].get("delta") or {}
+                if text := delta.get("content"):
                     yield text
+                for frag in delta.get("tool_calls") or []:
+                    call = calls.setdefault(frag["index"], {"id": "", "name": "", "arguments": ""})
+                    fn = frag.get("function") or {}
+                    call["id"] = frag.get("id") or call["id"]
+                    call["name"] += fn.get("name") or ""
+                    call["arguments"] += fn.get("arguments") or ""
     except httpx.HTTPError as e:
         raise LLMError(f"DeepSeek request failed: {e}") from e
     except json.JSONDecodeError as e:
         raise LLMError(f"DeepSeek sent a malformed stream: {e}") from e
+    except KeyError as e:
+        raise LLMError(f"DeepSeek sent a tool call without {e}") from e
+    for _, call in sorted(calls.items()):
+        yield ToolCall(call["id"], call["name"], call["arguments"])

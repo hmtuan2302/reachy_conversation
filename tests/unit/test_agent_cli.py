@@ -59,7 +59,9 @@ async def test_source_error_propagates_after_pending_answers() -> None:
 
 
 def _args(no_speak: bool = True) -> argparse.Namespace:
-    return argparse.Namespace(mic=False, stdin=False, file=None, no_speak=no_speak)
+    return argparse.Namespace(
+        mic=False, stdin=False, file=None, type=False, no_speak=no_speak, robot=False
+    )
 
 
 @pytest.mark.parametrize("missing", ["HF_TOKEN", "DEEPSEEK_API_KEY"])
@@ -92,7 +94,7 @@ def test_run_wires_transcripts_into_deepseek(
         yield "Hi!"
 
     monkeypatch.setattr(cli, "transcribe_stream", fake_transcribe)
-    monkeypatch.setattr(cli, "chat_stream", fake_chat)
+    monkeypatch.setattr(cli, "chat_events", fake_chat)
     monkeypatch.setattr(cli, "source_from_args", lambda _a: _turns())
     assert cli.run(_args()) == 0
     assert capsys.readouterr().out == "you: Hello.\nbot: Hi!\n"
@@ -236,3 +238,97 @@ def test_stop_check_uses_fast_model_not_llm_model(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(cli, "source_from_args", lambda _a: _turns())
     assert cli.run(_args()) == 0
     assert models == ["deepseek-chat"]
+
+
+def test_robot_flag_needs_robot_host(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.delenv("ROBOT_HOST", raising=False)
+    args = _args()
+    args.robot = True
+    assert cli.run(args) == 2
+    assert "ROBOT_HOST" in capsys.readouterr().err
+
+
+async def test_stop_mid_answer_calls_on_stop_once() -> None:
+    stops: list[str] = []
+    cls = _classify({"stop": Intent(True, ""), "uh": Intent(False, "")})
+    await cli.converse(
+        _turns("A", "uh", "stop"),
+        _agent(delay=0.2),
+        io.StringIO(),
+        classify=cls,
+        on_stop=lambda: stops.append("x"),
+    )
+    assert stops == ["x"]  # side talk ("uh") does not stop the head
+
+
+async def test_stop_while_idle_but_moving_stops_without_asking_the_agent() -> None:
+    stops: list[str] = []
+    asked: list[str] = []
+
+    async def chat(messages: list[dict[str, str]]) -> AsyncIterator[str]:
+        asked.append(messages[-1]["content"])
+        yield "ok"
+
+    out = io.StringIO()
+    await cli.converse(
+        _turns("thôi", "hello"),
+        Agent(chat),
+        out,
+        classify=_classify({"thôi": Intent(True, "")}),
+        on_stop=lambda: stops.append("x"),
+        moving=lambda: not stops,  # moving until stopped
+    )
+    assert stops == ["x"]
+    assert asked == ["hello"]  # the stop never reached the agent
+    assert out.getvalue() == "you: thôi\n  (stopped)\nyou: hello\nbot: ok\n"
+
+
+async def test_non_stop_while_moving_goes_to_the_agent() -> None:
+    out = io.StringIO()
+    await cli.converse(_turns("A"), _agent(), out, classify=_classify({}), moving=lambda: True)
+    assert out.getvalue() == "you: A\nbot: a1\n"
+
+
+async def test_typed_turns_skip_blank_lines_and_end_at_eof() -> None:
+    got = [
+        t async for t in cli.typed_turns(io.StringIO("turn left\n\n  \ndance and tell me a joke\n"))
+    ]
+    assert got == ["turn left", "dance and tell me a joke"]
+
+
+def test_type_mode_needs_no_hf_token_and_sends_typed_lines(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.setattr("sys.stdin", io.StringIO("Hello.\n"))
+
+    async def fake_chat(messages: list[dict[str, str]], **kw: Any) -> AsyncIterator[str]:
+        yield "Hi!"
+
+    def no_audio(_a: Any) -> Any:
+        raise AssertionError("--type must not open an audio source")
+
+    monkeypatch.setattr(cli, "chat_events", fake_chat)
+    monkeypatch.setattr(cli, "source_from_args", no_audio)
+    args = _args()
+    args.type = True
+    assert cli.run(args) == 0
+    assert capsys.readouterr().out == "you: Hello.\nbot: Hi!\n"
+
+
+def test_type_flag_is_agent_only() -> None:
+    import argparse as ap
+
+    from reachy_demo.voice import transcribe_cli
+
+    parser = ap.ArgumentParser()
+    transcribe_cli.add_source_args(parser)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--type"])

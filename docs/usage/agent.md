@@ -43,7 +43,7 @@ Run commands from the repo folder, because `.env` is read from the folder you ru
 
 ## Use
 
-Pick one input, the same as `transcribe`:
+Pick one input: the same three as `transcribe`, plus `--type`:
 
 ```bash
 # Best on WSL: Windows records the mic, and the audio is piped into WSL (see transcribe.md)
@@ -53,7 +53,24 @@ ffmpeg.exe -hide_banner -loglevel error -f dshow -audio_buffer_size 50 \
 
 uv run reachy-demo agent --mic                # mic through WSLg
 uv run reachy-demo agent --file question.wav  # a recorded question
+uv run reachy-demo agent --type               # type instead of speaking
 ```
+
+### Typing instead of speaking (`--type`)
+
+Each line you type and send with **Enter** is one turn, just like a finished sentence when speaking. Empty lines are skipped. **Ctrl-D** ends the input (after the last answer), and **Ctrl-C** quits at once.
+
+```bash
+uv run reachy-demo agent --type --robot            # type commands, the robot moves and answers aloud
+uv run reachy-demo agent --type --robot --no-speak # text answers only
+```
+
+- **What you skip:** speech-to-text and the mic. `HF_TOKEN` isn't needed, and nothing is saved to `data/recordings`.
+- **Speaking still works:** answers are spoken unless you add `--no-speak`.
+- **Stop:** typing `stop` (or `thôi`) while Reachy answers or moves works like saying it.
+- **Ducking:** playback isn't turned down while you type.
+- **Display:** your line appears twice, once as you type it and once as `you: …`.
+- **Piping works too:** `printf 'turn left\ndance\n' | uv run reachy-demo agent --type --robot` runs a fixed script of turns.
 
 Press **Ctrl-C** to stop. File mode stops by itself when the file ends and the last answer is printed.
 
@@ -89,6 +106,95 @@ The stop takes effect after you finish the sentence: turn end (about 0.5–1.2 s
 
 Tune when it ducks with `VAD_RMS` in `.env` (default 500). `uv run python scripts/mic_check.py` prints your mic's `rms`: set `VAD_RMS` above the noise level and below your speech. A headset avoids Reachy hearing itself.
 
+## Moving the head and dancing (`--robot`)
+
+With `--robot`, the agent can move Reachy's head and dance when you ask it to: "turn left", "look up", "quay sang phải và nhìn xuống", "dance and tell me a joke".
+
+```bash
+uv sync --extra robot --extra mic              # once: Reachy Mini SDK, dances library, laptop mic
+uv run reachy-demo agent --mic --robot         # robot at ROBOT_HOST in .env (use its IP)
+uv run reachy-demo agent --type --robot        # or type the commands
+```
+
+A plain `uv sync` removes the SDK again, so always sync with both extras.
+
+### The tools
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `turn_head` (yaw) | `left` / `right` / `center` | +20° / −20° / 0°, in 1 s |
+| `tilt_head` (pitch) | `up` / `down` / `center` | −15° / +15° / 0°, in 1 s |
+| `roll_head` (roll, lean toward a shoulder) | `left` / `right` / `center` | +15° / −15° / 0°, in 1 s |
+| `dance` | `move`: one of the 20 moves below (omit for a random one); `repeat` | 2–5 s per pass, at most 15 s |
+| `stop_head` | (none) | ends a dance now and drops queued moves |
+
+- Head moves go to a **fixed angle only**. Each one changes its own axis and keeps the others, so "right and down" ends at yaw −20°, pitch +15°. Asking twice ("more left") stays at +20°.
+- Change the angles in `POSES` in [src/reachy_demo/agent/tools/head.py](../../src/reachy_demo/agent/tools/head.py).
+
+### Dances
+
+The dances are the moves of Pollen's `reachy_mini_dances_library`, the same ones the reference app's `dance` tool uses. They're installed with the `robot` extra. Without the library, the `dance` tool isn't offered.
+
+`simple_nod`, `head_tilt_roll`, `side_to_side_sway`, `dizzy_spin`, `stumble_and_recover`, `headbanger_combo`, `interwoven_spirals`, `sharp_side_tilt`, `side_peekaboo`, `yeah_nod`, `uh_huh_tilt`, `neck_recoil`, `chin_lead`, `groovy_sway_and_roll`, `chicken_peck`, `side_glance_flick`, `polyrhythm_combo`, `grid_snap`, `pendulum_swing`, `jackson_square`
+
+- The model picks the move from its description ("do a dizzy dance" → `dizzy_spin`), or a random one when you just say "dance".
+- A dance moves the whole head: tilt and turn, **position** (sway, bounce, peck forward) and **both antennas**.
+- **Length:** one pass is 2.1–5.3 s at the library's 114 BPM. `repeat` adds passes, up to 15 s in total. Longer requests are cut to 15 s.
+- **How it plays:** our motion loop plays it, not the SDK's `play_move`, so it obeys the busy rules, stop and exit below. It eases in from the current pose and ends at neutral.
+
+### Safety limits
+
+Whatever a move computes, no pose outside these limits is ever sent:
+
+| Axis | Limit |
+|---|---|
+| yaw / pitch / roll | ±45° / ±30° / ±25° |
+| head position x / y / z | ±20 / ±40 / ±40 mm |
+| antennas | ±70° |
+
+These are the widest values the 20 library moves use (sampled), so the dances play unclipped. The head tools stay at their smaller fixed angles. Limits and the loop are in [src/reachy_demo/robot/motion.py](../../src/reachy_demo/robot/motion.py), and the library wrapper is in [src/reachy_demo/robot/dances.py](../../src/reachy_demo/robot/dances.py).
+
+### One motion loop
+
+All moves go into **one queue**, played by **one loop** ([motion.py](../../src/reachy_demo/robot/motion.py)). The loop is the only code that sends poses (head and antennas) to the robot: about 50 `set_target()` calls a second. Two moves can never fight over the head.
+
+- A tool call returns at once with `started …`. The agent doesn't wait for the head, so Reachy can talk while it moves.
+- Moves run one at a time, in order. At most 4 can wait. Another one gets `busy: too many moves queued`.
+- At startup the motors are enabled and the head and antennas ease to neutral (2 s), so the loop starts from a known pose. Neutral antennas are the SDK's ±10° (less shaking than straight up).
+
+**Rules while moving:**
+
+| Case | Rule |
+|---|---|
+| Moves from one request ("turn right and look down") | Queued, run in order |
+| A dance after short moves ("look up, then dance") | Queued after them |
+| Any move or dance **while a dance runs or waits** | Refused with `busy: dancing, say stop first`. Reachy says so aloud. |
+| Stop | Always accepted |
+
+### What you hear
+
+| You say | What happens |
+|---|---|
+| "turn right", "quay sang phải và nhìn xuống", "dance" | Reachy moves and says nothing (empty `bot:` line) |
+| "turn left and tell me a joke", "dance and tell me a joke" | Reachy moves **and** answers at the same time. The model sets `reply: true` on the move, which triggers one more LLM call for the words. |
+| "turn left" while dancing | "I'm still dancing, say stop first." |
+
+Measured with DeepSeek and a fake robot: for "dance and tell me a joke", the joke text was ready about 2 s after the turn ended, while the dance was running. Speech then adds about 1 s of Gemini TTS.
+
+### Stopping
+
+- **While Reachy answers:** "stop", "dừng lại", "thôi" cancels the answer and the moves.
+- **While Reachy only moves** (for example after "dance"): every turn you say first goes through the same fast stop check (about 0.3–0.5 s). "Stop", "enough" or "thôi" stops the moves without asking the agent. Anything else goes to the agent as usual.
+- **"Stop dancing"** can also reach the agent, which calls `stop_head`.
+- **What stops:** a dance ends at once and the head eases back to neutral (0.5 s). A 1 s head move already in progress finishes, so head moves always end on their fixed angle. Queued moves are dropped. Right after a stop, new moves are accepted.
+- One stop stops everything: "stop talking" also ends a dance.
+
+### Errors and exit
+
+- If sending a pose fails (Wi-Fi drop, robot asleep), you see `  (head error: …)`. The queue is dropped, the loop is free again (it never stays `busy`), and the next move restarts it. Reachy doesn't say it failed: it already answered when the move was queued.
+- On exit (Ctrl-C, an error or the end of input), whatever runs, even a dance, ends at once. The head eases to neutral, then is lowered into the robot's rest pose (2 s, antennas folded, the same pose as the SDK's `goto_sleep()`). Only then are the motors disabled, so the head doesn't drop. It doesn't wait for a dance to finish.
+- **Motors stay off after exit.** The head rests in the sleep pose, and the next app or script must call `mini.enable_motors()` before it moves anything. `agent --robot` does that at startup. Your own scripts need it too, or the robot ignores their moves.
+
 ## Debug recording (saved on exit)
 
 When you use `--mic` or `--stdin`, everything the app sent for transcription is saved when it exits: on Ctrl-C, on an error, or at the end of the input:
@@ -109,13 +215,17 @@ If it plays back as silence, the mic route isn't delivering sound (see the mic s
 | What you see | Meaning / fix |
 |---|---|
 | `config error: DEEPSEEK_API_KEY is required` (exit 2) | Add the key to `.env` |
-| `config error: HF_TOKEN is required` (exit 2) | Add the HF token to `.env` |
+| `config error: HF_TOKEN is required` (exit 2) | Add the HF token to `.env`, or use `--type` |
 | `bot: (error: DeepSeek returned 401: ...)` | The key is wrong or revoked. It **keeps listening**, so fix `.env` and restart |
 | `bot: (error: DeepSeek returned 402: ...)` | Out of DeepSeek balance. Top up at platform.deepseek.com |
 | `bot: ... (error: DeepSeek request failed: ...)` | Network dropped mid-answer. The partial answer stays on screen but isn't remembered, and listening continues |
 | `config error: GEMINI_API_KEY is required` (exit 2) | Add the Gemini key, or run with `--no-speak` |
 | `  (speech error: Gemini TTS returned 4xx: ...)` | The Gemini key is wrong (400/403) or the quota is used up (429). The text answer is already shown, and it keeps listening |
 | `  (speech error: cannot start player 'ffplay.exe' ...)` | Install Windows ffmpeg, or set `TTS_PLAYER`. The WAV is still saved |
+| `config error: ROBOT_HOST is required` (exit 2) | Set the robot's IP in `.env`, or drop `--robot` |
+| `  (head error: …)` | A head move failed (robot asleep, Wi-Fi drop). Queued moves are dropped and the chat goes on |
+| `robot error: cannot connect to ...` (exit 1), other cause | Robot off, wrong IP, or not on the same Wi-Fi. Under WSL2 use the IP with mirrored networking |
+| `robot error: ... No module named 'reachy_mini'` (exit 1) | Run `uv sync --extra robot --extra mic` |
 | `transcription stopped: ...` (exit 1) | Speech → text failed (network or token). See [transcribe.md](transcribe.md) |
 | `error: ...` (exit 2) | Bad file or mic problem. See [transcribe.md](transcribe.md) |
 
@@ -123,7 +233,7 @@ If it plays back as silence, the mic route isn't delivering sound (see the mic s
 
 - Speech starts after the whole text answer is ready (answers are short, so this adds under 1 s). There's no interrupting the bot while it speaks.
 - **Echo:** with laptop speakers the mic can hear the bot and treat it as a new question. Use headphones.
-- No tools: it can't move the robot or remember things between runs. Conversation memory lasts only while the command runs.
+- The only tools are the head tools (with `--robot`). It can't remember things between runs: conversation memory lasts only while the command runs.
 - Piping audio **faster than real time** (e.g. `ffmpeg` without `-re`) can join separate sentences into one turn. A live mic and `--file` are paced in real time.
 - Your audio goes to Pollen's Hugging Face server, your questions go to DeepSeek, and the answers go to Google Gemini for speech.
-- Code: [src/reachy_demo/agent/](../../src/reachy_demo/agent/) (`llm.py` DeepSeek client, `agent.py` history and prompt, `cli.py` pipeline), [src/reachy_demo/voice/tts.py](../../src/reachy_demo/voice/tts.py), [src/reachy_demo/audio/player.py](../../src/reachy_demo/audio/player.py).
+- Code: [src/reachy_demo/agent/](../../src/reachy_demo/agent/) (`llm.py` DeepSeek client, `agent.py` history, prompt and tool loop, `cli.py` pipeline, `tools/head.py` head tools), [src/reachy_demo/robot/adapter.py](../../src/reachy_demo/robot/adapter.py), [src/reachy_demo/voice/tts.py](../../src/reachy_demo/voice/tts.py), [src/reachy_demo/audio/player.py](../../src/reachy_demo/audio/player.py).

@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from reachy_demo.agent.llm import LLMError, chat_stream
+from reachy_demo.agent.llm import LLMError, ToolCall, chat_events, chat_stream
 
 MSGS = [{"role": "user", "content": "Thủ đô?"}]
 
@@ -62,3 +62,38 @@ async def test_network_error_raises_llm_error() -> None:
 
     with pytest.raises(LLMError, match="no route"):
         await _collect(httpx.MockTransport(handle))
+
+
+def _tool_frag(index: int, id_: str | None = None, name: str = "", args: str = "") -> str:
+    frag: dict[str, object] = {"index": index, "function": {"name": name, "arguments": args}}
+    if id_:
+        frag["id"] = id_
+    return "data: " + json.dumps({"choices": [{"delta": {"tool_calls": [frag]}}]}) + "\n\n"
+
+
+async def test_tool_calls_joined_by_index_and_sent_tools() -> None:
+    seen: list[httpx.Request] = []
+
+    def handle(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        body = _sse(
+            _tool_frag(0, "c1", "turn_head", '{"direc'),
+            _tool_frag(1, "c2", "tilt_head", '{"direction":'),
+            _tool_frag(0, args='tion": "right"}'),
+            _tool_frag(1, args=' "down"}'),
+            "data: [DONE]\n\n",
+        )
+        return httpx.Response(200, content=body)
+
+    tools = [{"type": "function", "function": {"name": "turn_head"}}]
+    got = [
+        e
+        async for e in chat_events(
+            MSGS, api_key="k", tools=tools, transport=httpx.MockTransport(handle)
+        )
+    ]
+    assert got == [
+        ToolCall("c1", "turn_head", '{"direction": "right"}'),
+        ToolCall("c2", "tilt_head", '{"direction": "down"}'),
+    ]
+    assert json.loads(seen[0].content)["tools"] == tools

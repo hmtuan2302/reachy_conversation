@@ -16,8 +16,10 @@ from reachy_demo.audio.sources import Recording, mic_chunks, stdin_chunks, wav_c
 from reachy_demo.voice.transcribe import transcribe_stream
 
 
-def add_source_args(p: argparse.ArgumentParser) -> None:
+def add_source_args(p: argparse.ArgumentParser, typing: bool = False) -> None:
     src = p.add_mutually_exclusive_group(required=True)
+    if typing:
+        src.add_argument("--type", action="store_true", help="type your turns instead of speaking")
     src.add_argument("--mic", action="store_true", help="laptop microphone (needs --extra mic)")
     src.add_argument("--file", type=Path, help="16-bit PCM WAV")
     src.add_argument(
