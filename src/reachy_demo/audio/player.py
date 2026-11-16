@@ -5,10 +5,15 @@ from __future__ import annotations
 import asyncio
 import shlex
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
-from reachy_demo.audio.sources import save_wav
+import numpy as np
+
+from reachy_demo.audio.sources import RATE, save_wav
+
+BYTES_PER_S = RATE * 2
+PIECE = BYTES_PER_S // 10  # 100 ms: how often the gain is re-read
 
 # Windows-native playback from WSL (same route as the mic); raw PCM on stdin.
 DEFAULT_PLAYER = (
@@ -26,11 +31,18 @@ def speech_path(directory: Path, n: int) -> Path:
 
 
 async def play_and_save(
-    chunks: AsyncIterator[bytes], *, path: Path, player_cmd: str | None
+    chunks: AsyncIterator[bytes],
+    *,
+    path: Path,
+    player_cmd: str | None,
+    gain: Callable[[], float] | None = None,
+    lead_s: float = 0.2,
 ) -> Path:
     """Play chunks as they arrive (if `player_cmd`), and always save everything received to `path`.
 
-    Source errors are re-raised after saving; playback problems raise PlayerError after saving.
+    Playback is paced to stay only `lead_s` ahead of the speaker, so `gain()` (read per 100 ms
+    piece) changes what is heard soon. The saved WAV is unscaled. Source errors are re-raised
+    after saving; playback problems raise PlayerError after saving.
     """
     pcm = bytearray()
     problem = ""
@@ -46,12 +58,20 @@ async def play_and_save(
         except OSError as e:
             problem = f"cannot start player {player_cmd.split()[0]!r}: {e}"
     finished = False
+    start = time.monotonic()
     try:
         async for chunk in chunks:
             pcm += chunk
-            if proc and proc.stdin and not problem:
+            if not (proc and proc.stdin):
+                continue
+            for i in range(0, len(chunk), PIECE):
+                if problem:
+                    break
+                ahead = (len(pcm) - len(chunk) + i) / BYTES_PER_S - (time.monotonic() - start)
+                if ahead > lead_s:
+                    await asyncio.sleep(ahead - lead_s)
                 try:
-                    proc.stdin.write(chunk)
+                    proc.stdin.write(_scaled(chunk[i : i + PIECE], gain() if gain else 1.0))
                     await proc.stdin.drain()
                 except (BrokenPipeError, ConnectionResetError):
                     problem = "player exited before the audio ended"
@@ -70,6 +90,13 @@ async def play_and_save(
     if problem:
         raise PlayerError(f"{problem} (audio saved to {path})")
     return path
+
+
+def _scaled(piece: bytes, gain: float) -> bytes:
+    if gain == 1.0:
+        return piece
+    x = np.frombuffer(piece[: len(piece) // 2 * 2], dtype="<i2").astype(np.float64) * gain
+    return np.clip(np.round(x), -32768, 32767).astype("<i2").tobytes()
 
 
 async def _finish(proc: asyncio.subprocess.Process) -> None:

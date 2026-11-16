@@ -1,7 +1,10 @@
+import asyncio
+import time
 import wave
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from reachy_demo.audio.player import PlayerError, play_and_save, speech_path
@@ -63,3 +66,42 @@ def test_speech_path_is_timestamped_and_numbered(tmp_path: Path) -> None:
     p = speech_path(tmp_path / "speech", 3)
     assert p.parent == tmp_path / "speech" and p.parent.is_dir()
     assert p.name.endswith("-3.wav") and len(p.name) == len("20261116-091502-3.wav")
+
+
+async def test_gain_scales_played_audio_not_wav(tmp_path: Path) -> None:
+    played, out = tmp_path / "played.raw", tmp_path / "a.wav"
+    pcm = np.full(2400, 4000, "<i2").tobytes()
+    cmd = f"sh -c 'cat > {played}'"
+    await play_and_save(_chunks(pcm), path=out, player_cmd=cmd, gain=lambda: 0.25)
+    assert set(np.frombuffer(played.read_bytes(), "<i2").tolist()) == {1000}
+    assert _wav_pcm(out) == pcm
+
+
+async def test_playback_is_paced(tmp_path: Path) -> None:
+    played, out = tmp_path / "played.raw", tmp_path / "a.wav"
+    pcm = b"\x00\x00" * (24000 // 2)  # 0.5 s arriving at once
+    t0 = time.monotonic()
+    await play_and_save(_chunks(pcm), path=out, player_cmd=f"sh -c 'cat > {played}'", lead_s=0.1)
+    assert (
+        time.monotonic() - t0 >= 0.28
+    )  # last 100 ms piece is written 0.1 s (lead) before it plays
+    assert played.read_bytes() == pcm
+
+
+async def test_cancel_kills_player_and_saves(tmp_path: Path) -> None:
+    out = tmp_path / "a.wav"
+    first = b"\x01\x00" * 2400
+
+    async def endless() -> AsyncIterator[bytes]:
+        yield first
+        await asyncio.sleep(60)
+        yield b"\x02\x00"
+
+    task = asyncio.create_task(
+        play_and_save(endless(), path=out, player_cmd="sh -c 'cat >/dev/null'")
+    )
+    await asyncio.sleep(0.2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 2)
+    assert _wav_pcm(out) == first
