@@ -15,6 +15,7 @@ dependencies = [
 robot = ["reachy-mini>=1.13"]            # SDK; needs GStreamer on the host (see docs/architecture/06-operations.md)
 perception = ["mediapipe>=0.10", "opencv-python-headless>=4.10"]
 speaker = ["sherpa-onnx>=1.10"]          # speaker-embedding gate
+mic = ["sounddevice>=0.5"]               # laptop mic for `translate --mic`
 
 [project.scripts]
 reachy-demo = "reachy_demo.__main__:main"
@@ -46,7 +47,7 @@ strict = true
 files = ["reachy_demo", "tests"]
 # SDK / model libs ship without stubs
 [[tool.mypy.overrides]]
-module = ["reachy_mini.*", "mediapipe.*", "cv2.*", "sherpa_onnx.*", "onnxruntime.*"]
+module = ["reachy_mini.*", "mediapipe.*", "cv2.*", "sherpa_onnx.*", "onnxruntime.*", "sounddevice.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

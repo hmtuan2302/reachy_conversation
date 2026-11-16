@@ -1362,6 +1362,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+mic = [
+    { name = "sounddevice" },
+]
 perception = [
     { name = "mediapipe" },
     { name = "opencv-python-headless" },
@@ -1392,9 +1395,10 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "reachy-mini", marker = "extra == 'robot'", specifier = ">=1.13" },
     { name = "sherpa-onnx", marker = "extra == 'speaker'", specifier = ">=1.10" },
+    { name = "sounddevice", marker = "extra == 'mic'", specifier = ">=0.5" },
     { name = "websockets", specifier = ">=14" },
 ]
-provides-extras = ["robot", "perception", "speaker"]
+provides-extras = ["robot", "perception", "speaker", "mic"]
 
 [package.metadata.requires-dev]
 dev = [

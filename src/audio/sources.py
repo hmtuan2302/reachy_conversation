@@ -1,0 +1,63 @@
+"""Audio sources for the translate tool: WAV file or laptop mic, as 24 kHz mono PCM16 chunks."""
+
+from __future__ import annotations
+
+import asyncio
+import wave
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import numpy as np
+
+RATE = 24_000
+
+
+def to_24k_mono_pcm16(samples: np.ndarray, rate: int) -> bytes:
+    """int16 samples, shape (n,) or (n, channels), at `rate` -> 24 kHz mono PCM16 bytes."""
+    mono = samples.astype(np.float64)
+    if mono.ndim == 2:
+        mono = mono.mean(axis=1)
+    if rate != RATE and len(mono):
+        # shortcut: linear resample, no anti-alias filter; upgrade if accuracy suffers on 44.1k+
+        n_out = round(len(mono) * RATE / rate)
+        mono = np.interp(np.arange(n_out) * rate / RATE, np.arange(len(mono)), mono)
+    return np.clip(np.round(mono), -32768, 32767).astype("<i2").tobytes()
+
+
+async def wav_chunks(
+    path: Path, *, realtime: bool = True, chunk_ms: int = 200
+) -> AsyncIterator[bytes]:
+    with wave.open(str(path), "rb") as w:
+        if w.getsampwidth() != 2 or w.getcomptype() != "NONE":
+            raise ValueError(f"{path}: need 16-bit PCM WAV, got {8 * w.getsampwidth()}-bit")
+        rate, channels = w.getframerate(), w.getnchannels()
+        frames = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
+    pcm = to_24k_mono_pcm16(frames.reshape(-1, channels), rate)
+    step = RATE * 2 * chunk_ms // 1000
+    for i in range(0, len(pcm), step):
+        yield pcm[i : i + step]
+        if realtime:
+            await asyncio.sleep(chunk_ms / 1000)
+
+
+async def mic_chunks(*, chunk_ms: int = 200) -> AsyncIterator[bytes]:
+    try:
+        import sounddevice as sd
+    except ImportError as e:  # sounddevice is the optional `mic` extra
+        raise RuntimeError("install the mic extra: uv sync --extra mic") from e
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[bytes] = asyncio.Queue()
+
+    def on_audio(data: bytes, _frames: int, _time: object, _status: object) -> None:
+        loop.call_soon_threadsafe(queue.put_nowait, bytes(data))
+
+    stream = sd.RawInputStream(
+        samplerate=RATE,
+        channels=1,
+        dtype="int16",
+        blocksize=RATE * chunk_ms // 1000,
+        callback=on_audio,
+    )
+    with stream:
+        while True:
+            yield await queue.get()
