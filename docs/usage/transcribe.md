@@ -146,4 +146,4 @@ Your audio leaves your machine and goes to Pollen's Hugging Face endpoint.
 
 - No live partial text while you speak. Each line appears when the sentence ends.
 - English is verified. Vietnamese should work, since the speech recognizer is multilingual, but hasn't been checked yet. Please try it with `--mic`.
-- Code: [src/voice/transcribe.py](../../src/voice/transcribe.py), [src/voice/transcribe_cli.py](../../src/voice/transcribe_cli.py), [src/audio/sources.py](../../src/audio/sources.py).
+- Code: [src/reachy_demo/voice/transcribe.py](../../src/reachy_demo/voice/transcribe.py), [src/reachy_demo/voice/transcribe_cli.py](../../src/reachy_demo/voice/transcribe_cli.py), [src/reachy_demo/audio/sources.py](../../src/reachy_demo/audio/sources.py).

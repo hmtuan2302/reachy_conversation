@@ -23,7 +23,7 @@ uv run reachy-demo check-config
 
 Done = ruff, mypy and pytest all green. `unset VIRTUAL_ENV` if uv warns about a conda env.
 
-## Layout (`reachy_demo/`)
+## Layout (`src/reachy_demo/`)
 
 `config.py` env → frozen `Config` · `ops/logging.py` JSONL + trace id · `robot/` (only SDK import) · `audio/` · `voice/` (only Realtime import) · `perception/` (only vision-API import) · `attention/` · `agent/` · `memory/` · `ops/`. Tests mirror it under `tests/{unit,integration,replay}`; `models/` and `data/` are git-ignored. Currently **scaffold only**: config, logging, CLI `check-config`. Feature modules are empty packages awaiting their milestone (06-operations §9).
 
