@@ -108,7 +108,7 @@ Tune when it ducks with `VAD_RMS` in `.env` (default 500). `uv run python script
 
 ## Moving the head and dancing (`--robot`)
 
-With `--robot`, the agent can move Reachy's head and dance when you ask it to: "turn left", "look up", "quay sang phải và nhìn xuống", "dance and tell me a joke".
+With `--robot`, the agent can move Reachy's head, dance and look through its camera when you ask it to: "turn left", "look up", "quay sang phải và nhìn xuống", "dance and tell me a joke", "what is this?".
 
 ```bash
 uv sync --extra robot --extra mic              # once: Reachy Mini SDK, dances library, laptop mic
@@ -189,6 +189,45 @@ Measured with DeepSeek and a fake robot: for "dance and tell me a joke", the jok
 - **What stops:** a dance ends at once and the head eases back to neutral (0.5 s). A 1 s head move already in progress finishes, so head moves always end on their fixed angle. Queued moves are dropped. Right after a stop, new moves are accepted.
 - One stop stops everything: "stop talking" also ends a dance.
 
+### Seeing (camera)
+
+With `--robot`, Reachy can also look. Put a cup in front of it and ask "what is this?", "what am I holding?", "bạn thấy gì?" or "look at this".
+
+```
+you: What is this in front of you?
+bot: I see a white ceramic mug on the table.
+```
+
+How it works:
+1. The agent calls the `camera` tool with your question (in English).
+2. The tool takes the current frame from the robot's head camera (1280×720 JPEG over WebRTC).
+3. The frame and question go to the **vision model** (pick the provider below).
+4. The answer comes back as text, and Reachy says it in your language.
+
+**Pick the vision provider in `.env`:**
+
+```
+VISION_PROVIDER=hf             # default: the Reachy Hugging Face realtime server (HF_TOKEN)
+VISION_PROVIDER=deepseek       # DeepSeek chat with images (DEEPSEEK_API_KEY)
+# VISION_MODEL=deepseek-chat   # deepseek only; default deepseek-chat
+# VISION_BASE_URL=...          # deepseek only; any OpenAI-compatible endpoint (default LLM_BASE_URL)
+```
+
+| Provider | Model | Question → answer text | Notes |
+|---|---|---|---|
+| `hf` | Pollen's realtime server (model not disclosed) | about 5.0 s | The same server and `HF_TOKEN` as speech-to-text. What the reference app uses. |
+| `deepseek` | `deepseek-chat` | about 2.7 s | Fastest. Served as `deepseek-flash` without reasoning. |
+| `deepseek` | `deepseek-flash` | slower | Reasons first. Also sees images. |
+| `deepseek` | `deepseek-v4-pro` | n/a | **Can't see images.** It answers "I'm unable to view the image". |
+
+Times were measured 2026-11-16 with a test image and the full agent round trip. The terminal shows the provider at startup: `  (camera on, vision: deepseek deepseek-chat)`. An unknown `VISION_PROVIDER` stops the app with a config error (exit 2).
+
+- **Speed:** about 2.7–5 s from your question to the answer text, depending on the provider (table above), then the spoken answer.
+- **Follow-ups** ("what color is it?") may be answered from the last look without taking a new photo. Say "look again" to force a new one.
+- **Aim:** the camera sees what's in front of the head. Put the object about 30–60 cm in front of it, in good light. You can say "look down" first for things on the table.
+- **No camera:** if the camera stream can't start, you see `  (no camera: the robot can move but not see)` at startup. Head moves and dances still work.
+- **Setup:** with `VISION_PROVIDER=hf`, `HF_TOKEN` is needed with `--robot`, even with `--type`. With `deepseek`, `--type --robot` needs no `HF_TOKEN`.
+
 ### Errors and exit
 
 - If sending a pose fails (Wi-Fi drop, robot asleep), you see `  (head error: …)`. The queue is dropped, the loop is free again (it never stays `busy`), and the next move restarts it. Reachy doesn't say it failed: it already answered when the move was queued.
@@ -215,7 +254,10 @@ If it plays back as silence, the mic route isn't delivering sound (see the mic s
 | What you see | Meaning / fix |
 |---|---|
 | `config error: DEEPSEEK_API_KEY is required` (exit 2) | Add the key to `.env` |
-| `config error: HF_TOKEN is required` (exit 2) | Add the HF token to `.env`, or use `--type` |
+| `config error: HF_TOKEN is required` (exit 2) | Add the HF token to `.env` (speech-to-text, and the camera with `VISION_PROVIDER=hf`), or use `--type` |
+| `config error: VISION_PROVIDER must be one of hf, deepseek` (exit 2) | Fix `VISION_PROVIDER` in `.env` |
+| `  (no camera: the robot can move but not see)` | The WebRTC camera stream didn't start. Check the robot's network. Head moves still work |
+| Reachy says it can't see, or that it's too dark | The frame was empty, or the vision model failed (or took over 15 s). Check the light and what's in front of the camera. With `deepseek`, check that `VISION_MODEL` sees images (not `deepseek-v4-pro`) |
 | `bot: (error: DeepSeek returned 401: ...)` | The key is wrong or revoked. It **keeps listening**, so fix `.env` and restart |
 | `bot: (error: DeepSeek returned 402: ...)` | Out of DeepSeek balance. Top up at platform.deepseek.com |
 | `bot: ... (error: DeepSeek request failed: ...)` | Network dropped mid-answer. The partial answer stays on screen but isn't remembered, and listening continues |

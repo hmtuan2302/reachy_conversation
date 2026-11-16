@@ -41,7 +41,9 @@ Derived signals:
 
 ## 4. Cloud vision (`vision_client.py`)
 
-Async HTTPS to an OpenAI vision-capable model (`VISION_MODEL` in config), JPEG ≤ 1024 px long side, quality 80. Three calls with structured JSON output:
+**[changed 2026-11-16]** The first vision feature, the `camera` tool ("what is this?"), uses the **Reachy Hugging Face realtime server** instead (the same server as speech-to-text and as the reference app's camera tool): `perception/vision.py` `ask_image(jpeg, question)` sends the frame as an `input_image` item and reads the text answer. Spike: about 1.5 s per answer plus 0.9 s to open a session, and it runs alongside a speech-to-text session on the same token. No OpenAI key is needed. **[added 2026-11-16]** `VISION_PROVIDER=deepseek` switches it to DeepSeek chat with `image_url` content (`ask_image_chat`, OpenAI-compatible): `deepseek-chat` answered a test image in 1.1 s (2.7 s for the whole agent round trip vs 5.0 s with `hf`). `deepseek-v4-pro` can't see images. The OpenAI design below stays the plan for `confirm`/`locate` (F5) unless the HF model proves good enough there.
+
+Original plan: async HTTPS to an OpenAI vision-capable model (`VISION_MODEL` in config), JPEG ≤ 1024 px long side, quality 80. Three calls with structured JSON output:
 
 | Call | Used by | Input | Output |
 |---|---|---|---|

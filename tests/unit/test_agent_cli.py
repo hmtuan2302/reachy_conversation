@@ -332,3 +332,45 @@ def test_type_flag_is_agent_only() -> None:
     transcribe_cli.add_source_args(parser)
     with pytest.raises(SystemExit):
         parser.parse_args(["--type"])
+
+
+def test_unknown_vision_provider_is_a_config_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.setenv("VISION_PROVIDER", "openai")
+    assert cli.run(_args()) == 2
+    assert "VISION_PROVIDER" in capsys.readouterr().err
+
+
+def test_vision_asker_picks_provider_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    keys = {"HF_TOKEN": "hf_x", "DEEPSEEK_API_KEY": "sk-x"}
+    monkeypatch.delenv("VISION_MODEL", raising=False)
+    monkeypatch.delenv("VISION_BASE_URL", raising=False)
+    ask, label = cli.vision_asker("deepseek", keys, "https://api.deepseek.com")
+    assert label == "deepseek deepseek-chat"
+    assert ask.keywords == {  # type: ignore[attr-defined]
+        "api_key": "sk-x",
+        "model": "deepseek-chat",
+        "base_url": "https://api.deepseek.com",
+    }
+    monkeypatch.setenv("VISION_MODEL", "deepseek-flash")
+    assert cli.vision_asker("deepseek", keys, "u")[1] == "deepseek deepseek-flash"
+    ask, label = cli.vision_asker("hf", keys, "u")
+    assert label == "hf realtime server"
+    assert ask.keywords == {"hf_token": "hf_x"}  # type: ignore[attr-defined]
+
+
+def test_type_robot_with_deepseek_vision_needs_no_hf_token(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.delenv("ROBOT_HOST", raising=False)
+    monkeypatch.setenv("VISION_PROVIDER", "deepseek")
+    args = _args()
+    args.type, args.robot = True, True
+    assert cli.run(args) == 2
+    err = capsys.readouterr().err
+    assert "ROBOT_HOST" in err and "HF_TOKEN" not in err

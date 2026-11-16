@@ -43,7 +43,7 @@ SESSION = {
 }
 
 
-async def _allocate(
+async def allocate_session(
     session_url: str, token: str, transport: httpx.AsyncBaseTransport | None
 ) -> str:
     headers = {"User-Agent": "reachy-demo", "X-Reachy-Mini-Authorization": f"Bearer {token}"}
@@ -88,7 +88,7 @@ async def transcribe_stream(
     last_error = ""
     source_error: BaseException | None = None
     try:
-        url = await _allocate(session_url, hf_token, transport)
+        url = await allocate_session(session_url, hf_token, transport)
         headers = {"Authorization": f"Bearer {hf_token}"}
         async with connect(url, additional_headers=headers, max_size=None) as ws:
             await ws.send(json.dumps({"type": "session.update", "session": SESSION}))

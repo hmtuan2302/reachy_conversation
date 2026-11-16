@@ -26,10 +26,11 @@ from reachy_demo.agent.llm import (
     chat_events,
     chat_stream,
 )
-from reachy_demo.agent.tools import head
+from reachy_demo.agent.tools import Toolbox, ToolSet, camera, head
 from reachy_demo.audio.player import PlayerError
 from reachy_demo.audio.vad import EnergyVAD
-from reachy_demo.robot.adapter import connect_head
+from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
+from reachy_demo.robot.adapter import connect_robot
 from reachy_demo.robot.dances import load_dances
 from reachy_demo.robot.motion import Motion
 from reachy_demo.voice.speak_cli import speaker_from_env
@@ -204,7 +205,17 @@ async def _tap(chunks: AsyncIterator[bytes], vad: EnergyVAD) -> AsyncIterator[by
 
 def run(args: argparse.Namespace) -> int:
     load_dotenv(find_dotenv(usecwd=True))  # .env of the folder you run from
-    needed = ([] if args.type else ["HF_TOKEN"]) + ["DEEPSEEK_API_KEY"]
+    vision = os.environ.get("VISION_PROVIDER", "").strip().lower() or "hf"
+    if vision not in VISION_PROVIDERS:
+        print(
+            f"config error: VISION_PROVIDER must be one of {', '.join(VISION_PROVIDERS)}, "
+            f"got {vision!r}",
+            file=sys.stderr,
+        )
+        return 2
+    # HF_TOKEN: speech-to-text, and the camera's vision model when it runs on the HF server.
+    needs_hf = not args.type or (args.robot and vision == "hf")
+    needed = (["HF_TOKEN"] if needs_hf else []) + ["DEEPSEEK_API_KEY"]
     needed += [] if args.no_speak else ["GEMINI_API_KEY"]
     needed += ["ROBOT_HOST"] if args.robot else []
     keys = {name: os.environ.get(name, "").strip() for name in needed}
@@ -249,26 +260,59 @@ def run(args: argparse.Namespace) -> int:
     with contextlib.ExitStack() as stack:
         if args.robot:
             try:
-                set_pose = stack.enter_context(connect_head(keys["ROBOT_HOST"]))
+                robot = stack.enter_context(connect_robot(keys["ROBOT_HOST"]))
             except Exception as e:  # SDK raises its own connection errors
                 print(f"robot error: cannot connect to {keys['ROBOT_HOST']}: {e}", file=sys.stderr)
                 return 1
-            motion = Motion(set_pose, on_error=lambda e: print(f"  (head error: {e})"))
-            tools = head.HeadTools(motion, load_dances())
+            motion = Motion(robot.set_pose, on_error=lambda e: print(f"  (head error: {e})"))
+            head_tools = head.HeadTools(motion, load_dances())
+            prompt = f"{SYSTEM_PROMPT} {head.PROMPT}"
+            sets: list[ToolSet] = [head_tools]
+            if robot.has_camera:
+                ask, label = vision_asker(vision, keys, base_url)
+                print(f"  (camera on, vision: {label})")
+                sets.append(camera.CameraTools(robot.grab_jpeg, ask))
+                prompt += f" {camera.PROMPT}"
+            else:
+                print("  (no camera: the robot can move but not see)")
+            tools = Toolbox(*sets)
             agent = Agent(
-                partial(llm, model=model, tools=tools.specs()),
-                system_prompt=f"{SYSTEM_PROMPT} {head.PROMPT}",
-                tools=tools,
+                partial(llm, model=model, tools=tools.specs()), system_prompt=prompt, tools=tools
             )
             main = converse(
-                turns, agent, sys.stdout, speak, stop, on_stop=tools.stop, moving=lambda: tools.busy
+                turns,
+                agent,
+                sys.stdout,
+                speak,
+                stop,
+                on_stop=head_tools.stop,
+                moving=lambda: head_tools.busy,
             )
-            code = run_until_done(_then_close(main, tools))
+            code = run_until_done(_then_close(main, head_tools))
         else:
             agent = Agent(partial(llm, model=model))
             code = run_until_done(converse(turns, agent, sys.stdout, speak, stop))
     save_recording(args, rec)
     return code
+
+
+VISION_PROVIDERS = ("hf", "deepseek")
+
+
+def vision_asker(provider: str, keys: dict[str, str], llm_base_url: str) -> tuple[camera.Ask, str]:
+    """The camera's vision model picked by VISION_PROVIDER, and a label for the terminal."""
+    if provider == "deepseek":
+        # deepseek-chat sees images and doesn't reason first (fastest, 1.1 s in a test);
+        # deepseek-v4-pro can't see images.
+        model = os.environ.get("VISION_MODEL", "").strip() or "deepseek-chat"
+        ask = partial(
+            ask_image_chat,
+            api_key=keys["DEEPSEEK_API_KEY"],
+            model=model,
+            base_url=os.environ.get("VISION_BASE_URL", "").strip() or llm_base_url,
+        )
+        return ask, f"deepseek {model}"
+    return partial(ask_image_hf, hf_token=keys["HF_TOKEN"]), "hf realtime server"
 
 
 async def _then_close(main: Awaitable[None], tools: head.HeadTools) -> None:
