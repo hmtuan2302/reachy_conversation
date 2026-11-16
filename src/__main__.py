@@ -9,6 +9,7 @@ import sys
 from reachy_demo import __version__
 from reachy_demo.config import Config, ConfigError
 from reachy_demo.ops.logging import configure_logging
+from reachy_demo.voice import translate_cli
 
 log = logging.getLogger("reachy_demo")
 
@@ -16,10 +17,12 @@ log = logging.getLogger("reachy_demo")
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="reachy-demo")
     parser.add_argument("--version", action="version", version=__version__)
-    parser.add_argument(
-        "command", choices=["check-config"], help="more commands arrive per milestone"
-    )
+    sub = parser.add_subparsers(dest="command", required=True, help="per milestone")
+    sub.add_parser("check-config", help="validate .env / environment")
+    translate_cli.add_parser(sub)
     args = parser.parse_args(argv)
+    if args.command == "translate":
+        return translate_cli.run(args)  # needs only OPENAI_API_KEY, not the robot config
 
     try:
         cfg = Config.from_env()
