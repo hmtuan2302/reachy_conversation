@@ -105,3 +105,16 @@ async def test_cancel_kills_player_and_saves(tmp_path: Path) -> None:
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, 2)
     assert _wav_pcm(out) == first
+
+
+async def test_pacing_starts_when_audio_arrives(tmp_path: Path) -> None:
+    played, out = tmp_path / "played.raw", tmp_path / "a.wav"
+    pcm = b"\x00\x00" * (24000 // 2)  # 0.5 s, arriving at once after a 0.5 s TTS delay
+
+    async def late() -> AsyncIterator[bytes]:
+        await asyncio.sleep(0.5)
+        yield pcm
+
+    t0 = time.monotonic()
+    await play_and_save(late(), path=out, player_cmd=f"sh -c 'cat > {played}'", lead_s=0.1)
+    assert time.monotonic() - t0 >= 0.5 + 0.28  # the wait for audio is not counted as played

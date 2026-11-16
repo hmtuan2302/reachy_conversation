@@ -58,7 +58,7 @@ async def play_and_save(
         except OSError as e:
             problem = f"cannot start player {player_cmd.split()[0]!r}: {e}"
     finished = False
-    start = time.monotonic()
+    plays_until = 0.0  # monotonic time the speaker runs out of audio already written
     try:
         async for chunk in chunks:
             pcm += chunk
@@ -67,11 +67,13 @@ async def play_and_save(
             for i in range(0, len(chunk), PIECE):
                 if problem:
                     break
-                ahead = (len(pcm) - len(chunk) + i) / BYTES_PER_S - (time.monotonic() - start)
-                if ahead > lead_s:
+                if (ahead := plays_until - time.monotonic()) > lead_s:
                     await asyncio.sleep(ahead - lead_s)
+                piece = chunk[i : i + PIECE]
+                # a starved speaker (waiting for TTS) doesn't count as played
+                plays_until = max(plays_until, time.monotonic()) + len(piece) / BYTES_PER_S
                 try:
-                    proc.stdin.write(_scaled(chunk[i : i + PIECE], gain() if gain else 1.0))
+                    proc.stdin.write(_scaled(piece, gain() if gain else 1.0))
                     await proc.stdin.drain()
                 except (BrokenPipeError, ConnectionResetError):
                     problem = "player exited before the audio ended"

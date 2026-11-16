@@ -215,3 +215,24 @@ async def test_cancelled_answer_not_in_history() -> None:
         {"role": "user", "content": "B"},
         {"role": "assistant", "content": "b1"},
     ]
+
+
+def test_stop_check_uses_fast_model_not_llm_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.setenv("LLM_MODEL", "deepseek-v4-pro")  # streams reasoning first: too slow
+    models: list[str] = []
+
+    async def fake_chat(messages: list[dict[str, str]], **kw: Any) -> AsyncIterator[str]:
+        models.append(kw["model"])
+        yield '{"stop": true, "rest": ""}'
+
+    async def fake_converse(*a: Any) -> None:
+        await a[4]("stop")
+
+    monkeypatch.setattr(cli, "chat_stream", fake_chat)
+    monkeypatch.setattr(cli, "converse", fake_converse)
+    monkeypatch.setattr(cli, "source_from_args", lambda _a: _turns())
+    assert cli.run(_args()) == 0
+    assert models == ["deepseek-chat"]

@@ -23,6 +23,8 @@ def _chat(reply: str, seen: list[list[dict[str, str]]] | None = None):  # type: 
         ('{"stop": true, "rest": ""}', Intent(True, "")),
         ('{"stop": true, "rest": "what is the weather"}', Intent(True, "what is the weather")),
         ('{"stop": false, "rest": ""}', Intent(False, "")),
+        ('{"stop": true, "rest": null}', Intent(True, "")),
+        ('{"stop": true}', Intent(True, "")),
         ('```json\n{"stop": true, "rest": ""}\n```', Intent(True, "")),
         ("sure!", Intent(False, "")),
         ('{"stop": "yes", "rest": ""}', Intent(False, "")),

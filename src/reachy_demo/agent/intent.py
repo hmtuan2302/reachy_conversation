@@ -39,7 +39,7 @@ async def classify(text: str, chat: ChatFn, timeout_s: float = 2.0) -> Intent:
         async with asyncio.timeout(timeout_s):
             reply = "".join([piece async for piece in chat(messages)])
         data = json.loads(reply.strip().removeprefix("```json").strip("`").strip())
-        stop, rest = data["stop"], data.get("rest", "")
+        stop, rest = data["stop"], data.get("rest") or ""
         if not isinstance(stop, bool) or not isinstance(rest, str):
             raise ValueError(f"bad types: {data!r}")
     except (LLMError, TimeoutError, ValueError, KeyError, TypeError) as e:

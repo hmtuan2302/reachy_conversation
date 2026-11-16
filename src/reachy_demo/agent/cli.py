@@ -177,7 +177,9 @@ def run(args: argparse.Namespace) -> int:
         if args.no_speak
         else speaker_from_env(keys["GEMINI_API_KEY"], gain=lambda: DUCK if vad.speaking else 1.0)
     )
-    stop = partial(classify, chat=chat)
+    # The stop check always uses the fast non-reasoning model: reasoning models would hit its
+    # 2 s timeout every time, and stop would never work.
+    stop = partial(classify, chat=partial(chat, model=DEFAULT_MODEL))
     code = run_until_done(converse(turns, Agent(chat), sys.stdout, speak, stop))
     save_recording(args, rec)
     return code
