@@ -137,7 +137,7 @@ ffmpeg -i input.mp3 -ac 1 -ar 24000 -sample_fmt s16 out.wav
 ## How it works
 
 1. The command asks Pollen's Reachy session service (`pollen-robotics-reachy-mini-realtime-url.hf.space`) for a server, using your HF token. This is the same backend that `reachy_mini_conversation_app` uses.
-2. Audio is converted to 24 kHz mono PCM16 and streamed in 200 ms chunks over the realtime WebSocket.
+2. Audio is converted to 24 kHz mono PCM16 and streamed in 200 ms chunks over the realtime WebSocket. The app adds 0.5 s of silence before your audio and 2 s after it. The server's speech detector misses speech that starts at the very first sample (a short "hello" clip returned nothing without the lead-in), and it needs the trailing silence to know the last sentence has ended.
 3. The server detects each sentence, transcribes it with language `auto`, and returns the text. It's set to transcribe only (`create_response: false`), so the AI doesn't reply.
 
 Your audio leaves your machine and goes to Pollen's Hugging Face endpoint.

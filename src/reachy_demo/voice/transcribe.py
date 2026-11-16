@@ -23,7 +23,10 @@ from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
 SESSION_URL = "https://pollen-robotics-reachy-mini-realtime-url.hf.space/session"
 RATE = 24_000
-TAIL_SILENCE = b"\x00\x00" * RATE * 2  # 2 s, so server VAD closes the last utterance
+# The server VAD misses speech that starts at sample 0 (a 1.7 s "hello" clip gave no text),
+# so lead with 0.5 s of silence. The 2 s tail lets it close the last utterance.
+LEAD_SILENCE = b"\x00\x00" * (RATE // 2)
+TAIL_SILENCE = b"\x00\x00" * RATE * 2
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +64,7 @@ async def _send_audio(ws: ClientConnection, chunk: bytes) -> None:
 
 async def _pump(ws: ClientConnection, pcm24k: AsyncIterator[bytes]) -> None:
     try:
+        await _send_audio(ws, LEAD_SILENCE)
         async for chunk in pcm24k:
             await _send_audio(ws, chunk)
     except Exception:

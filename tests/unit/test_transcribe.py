@@ -88,13 +88,14 @@ async def test_session_is_transcription_only_with_auto_language() -> None:
     assert audio_in["format"] == {"type": "audio/pcm", "rate": 24000}
 
 
-async def test_file_end_appends_two_seconds_of_silence() -> None:
+async def test_audio_is_framed_by_leading_and_trailing_silence() -> None:
     log: list[Any] = []
     await _run(_transcribing_server(log))
     sent = b"".join(
         base64.b64decode(m["audio"]) for m in log[1:] if m["type"] == "input_audio_buffer.append"
     )
-    assert sent == b"\x01\x00" + b"\x00" * 96000
+    # 0.5 s lead-in: the server VAD misses speech that starts at sample 0. 2 s tail closes the turn.
+    assert sent == b"\x00" * 24000 + b"\x01\x00" + b"\x00" * 96000
 
 
 async def test_allocator_rejection_raises_connection_error() -> None:
