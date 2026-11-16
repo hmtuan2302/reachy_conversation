@@ -57,4 +57,6 @@ Done = ruff, mypy and pytest all green. `unset VIRTUAL_ENV` if uv warns about a 
 
 ## Workflow
 
+Every user-facing feature ships with a usage doc in `docs/usage/<feature>.md`, linked from README.md.
+
 Build one milestone at a time (M0…M10 in `06-operations.md` §9) and check it against its acceptance criteria before the next. Don't start a milestone's feature code without a failing test or a spike result. Ask before adding dependencies.
