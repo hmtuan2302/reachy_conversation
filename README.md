@@ -3,4 +3,5 @@
 Usage docs per feature: [docs/usage/](docs/usage/)
 
 - [Live transcribe: speech → text (mic / WAV)](docs/usage/transcribe.md)
-- [Voice agent: ask by voice, get an answer (mic / WAV → DeepSeek)](docs/usage/agent.md)
+- [Voice agent: ask by voice, hear the answer (mic → DeepSeek → Gemini speech)](docs/usage/agent.md)
+- [Speak: text → speech (Gemini, streamed, saved as WAV)](docs/usage/speak.md)

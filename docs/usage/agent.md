@@ -1,12 +1,15 @@
-# Voice agent: ask by voice, get an answer (text)
+# Voice agent: ask by voice, hear the answer
 
-Speak a question and the agent answers it in the terminal, in the language you spoke. This is stage 1 of the pipeline **speech → text → LLM → speech**; speaking the answer aloud comes in a later stage.
+Speak a question. The agent prints the answer in the language you spoke, says it aloud, and saves the spoken answer as a WAV file. Pipeline: **speech → text (HF server) → LLM (DeepSeek) → speech (Gemini)**.
 
 ```
 $ uv run reachy-demo agent --file data/girl-saying-hello_E_major.wav
 you: Hello.
 bot: Hello! How can I help you today?
+  (saved data/speech/20261116-085901-1.wav)      ← spoken through your headset, then saved
 ```
+
+Add `--no-speak` for text answers only.
 
 It remembers the conversation (the last 10 questions and answers), so follow-ups work:
 
@@ -28,7 +31,13 @@ HF_TOKEN=hf_...              # speech → text (Pollen's Hugging Face server)
 DEEPSEEK_API_KEY=sk-...      # the LLM; get one at platform.deepseek.com
 # LLM_MODEL=deepseek-chat    # optional: deepseek-chat (default, fastest) | deepseek-v4-pro (stronger, thinks first, slower)
 # LLM_BASE_URL=https://api.deepseek.com   # optional: any OpenAI-compatible endpoint
+GEMINI_API_KEY=...           # text → speech (not needed with --no-speak); aistudio.google.com
+# TTS_VOICE=Kore             # optional Gemini voice (e.g. Kore, Puck)
+# TTS_MODEL=gemini-3.8-flash-tts
+# TTS_PLAYER=none            # optional: save WAVs only, don't play. Default plays through Windows ffplay.exe
 ```
+
+Playback uses **Windows `ffplay.exe`**, which comes with `winget install Gyan.FFmpeg.Essentials` (see [transcribe.md](transcribe.md)). It plays on the Windows default output, e.g. your headset.
 
 Run commands from the repo folder, because `.env` is read from the folder you run in.
 
@@ -51,15 +60,16 @@ Press **Ctrl-C** to stop. File mode stops by itself when the file ends and the l
 ## How it works
 
 ```
-mic / stdin / file ─► speech → text ─► agent (DeepSeek) ─► terminal
-                      (one line per    (+ last 10 Q/A)    (later: text → speech)
+mic / stdin / file ─► speech → text ─► agent (DeepSeek) ─► terminal ─► Gemini TTS ─► headset
+                      (one line per    (+ last 10 Q/A)                (streamed)     + data/speech/*.wav
                        finished turn)
 ```
 
 1. **Your turn ends when you've finished speaking, not at every pause.** The Hugging Face server's smart turn detection decides. A pause of up to about 1.2 s in the middle of a sentence is kept as one turn (tested in English), and only the finished turn goes to the LLM.
 2. **The agent** sends a short system prompt, the last 10 Q/A pairs and your question to DeepSeek, and prints the answer as it streams (about 0.5 s to the first word).
 3. **Style:** it answers in your language (Vietnamese or English), in at most 3 sentences unless you ask for more, as plain text with no markdown (so it can be spoken later), and it says when it isn't sure.
-4. **One answer at a time.** If you finish another turn while it's answering, that turn waits and is answered next.
+4. **Speech:** when the text answer is complete, it goes to Gemini (`gemini-3.8-flash-tts`, streaming). Audio plays as it arrives (about 1 s to the first sound) and is saved to `data/speech/<date-time>-<n>.wav` when generation ends. It's saved even if playback fails.
+5. **One answer at a time.** If you finish another turn while it's answering or speaking, that turn waits and is answered next.
 
 ## Errors
 
@@ -70,13 +80,17 @@ mic / stdin / file ─► speech → text ─► agent (DeepSeek) ─► termina
 | `bot: (error: DeepSeek returned 401: ...)` | The key is wrong or revoked. It **keeps listening**, so fix `.env` and restart |
 | `bot: (error: DeepSeek returned 402: ...)` | Out of DeepSeek balance. Top up at platform.deepseek.com |
 | `bot: ... (error: DeepSeek request failed: ...)` | Network dropped mid-answer. The partial answer stays on screen but isn't remembered, and listening continues |
+| `config error: GEMINI_API_KEY is required` (exit 2) | Add the Gemini key, or run with `--no-speak` |
+| `  (speech error: Gemini TTS returned 4xx: ...)` | The Gemini key is wrong (400/403) or the quota is used up (429). The text answer is already shown, and it keeps listening |
+| `  (speech error: cannot start player 'ffplay.exe' ...)` | Install Windows ffmpeg, or set `TTS_PLAYER`. The WAV is still saved |
 | `transcription stopped: ...` (exit 1) | Speech → text failed (network or token). See [transcribe.md](transcribe.md) |
 | `error: ...` (exit 2) | Bad file or mic problem. See [transcribe.md](transcribe.md) |
 
 ## Limits
 
-- Text only: the answer isn't spoken yet (the next stage).
+- Speech starts after the whole text answer is ready (answers are short, so this adds under 1 s). There's no interrupting the bot while it speaks.
+- **Echo:** with laptop speakers the mic can hear the bot and treat it as a new question. Use headphones.
 - No tools: it can't move the robot or remember things between runs. Conversation memory lasts only while the command runs.
 - Piping audio **faster than real time** (e.g. `ffmpeg` without `-re`) can join separate sentences into one turn. A live mic and `--file` are paced in real time.
-- Your audio goes to Pollen's Hugging Face server, and your questions go to DeepSeek.
-- Code: [src/reachy_demo/agent/](../../src/reachy_demo/agent/) (`llm.py` DeepSeek client, `agent.py` history and prompt, `cli.py` pipeline).
+- Your audio goes to Pollen's Hugging Face server, your questions go to DeepSeek, and the answers go to Google Gemini for speech.
+- Code: [src/reachy_demo/agent/](../../src/reachy_demo/agent/) (`llm.py` DeepSeek client, `agent.py` history and prompt, `cli.py` pipeline), [src/reachy_demo/voice/tts.py](../../src/reachy_demo/voice/tts.py), [src/reachy_demo/audio/player.py](../../src/reachy_demo/audio/player.py).

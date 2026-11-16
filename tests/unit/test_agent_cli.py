@@ -9,6 +9,7 @@ import pytest
 from reachy_demo.agent import cli
 from reachy_demo.agent.agent import Agent
 from reachy_demo.agent.llm import LLMError
+from reachy_demo.voice.tts import TTSError
 
 
 async def _turns(*texts: str) -> AsyncIterator[str]:
@@ -56,8 +57,8 @@ async def test_source_error_propagates_after_pending_answers() -> None:
     assert out.getvalue() == "you: A\nbot: a1\n"
 
 
-def _args() -> argparse.Namespace:
-    return argparse.Namespace(mic=False, stdin=False, file=None)
+def _args(no_speak: bool = True) -> argparse.Namespace:
+    return argparse.Namespace(mic=False, stdin=False, file=None, no_speak=no_speak)
 
 
 @pytest.mark.parametrize("missing", ["HF_TOKEN", "DEEPSEEK_API_KEY"])
@@ -96,3 +97,37 @@ def test_run_wires_transcripts_into_deepseek(
     assert capsys.readouterr().out == "you: Hello.\nbot: Hi!\n"
     assert seen["hf"] == "hf_x" and seen["api_key"] == "sk-x"
     assert seen["model"] == "deepseek-v4-pro"
+
+
+async def test_speaks_each_completed_answer_but_not_failed_ones() -> None:
+    spoken: list[str] = []
+
+    async def speak(text: str) -> None:
+        spoken.append(text)
+
+    out = io.StringIO()
+    await cli.converse(_turns("A", "B"), _agent(fail={"A"}), out, speak=speak)
+    assert spoken == ["b1"]
+
+
+async def test_speech_error_is_printed_and_listening_continues() -> None:
+    async def speak(text: str) -> None:
+        raise TTSError("Gemini TTS returned 429")
+
+    out = io.StringIO()
+    await cli.converse(_turns("A", "B"), _agent(), out, speak=speak)
+    assert out.getvalue() == (
+        "you: A\nbot: a1\n  (speech error: Gemini TTS returned 429)\n"
+        "you: B\nbot: b1\n  (speech error: Gemini TTS returned 429)\n"
+    )
+
+
+def test_run_needs_gemini_key_only_when_speaking(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert cli.run(_args(no_speak=False)) == 2
+    assert "GEMINI_API_KEY" in capsys.readouterr().err
