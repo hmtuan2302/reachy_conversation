@@ -35,6 +35,19 @@ printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > ~/.asoundr
 uv run python -c "import sounddevice as sd; print(sd.query_devices())"   # must list "default"
 ```
 
+**Which mic is used (e.g. Soundcore Bluetooth headphones):** WSL can't see devices by name. It always records the *Windows default input*, which appears in WSL as `RDPSource`. To use your headset:
+
+1. Windows: Settings → System → Sound → Input → choose the headset mic (often "Headset" or "Hands-Free"), and check that the level bar moves when you speak.
+2. Check in WSL and record a 5 s test:
+   ```bash
+   sudo apt install -y pulseaudio-utils
+   pactl info | grep "Default Source"                # RDPSource
+   parecord --channels=1 --rate=24000 /tmp/t.wav & sleep 5; kill $!; paplay /tmp/t.wav
+   ```
+3. Restart `transcribe` after you change the Windows default.
+
+Bluetooth headsets switch to the lower-quality hands-free mode while the mic is in use. That's fine for speech, but a laptop or USB mic is clearer.
+
 If it still fails, allow microphone access for apps in Windows (Settings → Privacy & security → Microphone), then run `wsl --shutdown` from Windows and reopen the terminal.
 
 ## Use
@@ -75,6 +88,7 @@ ffmpeg -i input.mp3 -ac 1 -ar 24000 -sample_fmt s16 out.wav
 | 2 | `need 16-bit PCM WAV` / `not a readable WAV file` | Convert with ffmpeg (above) |
 | 2 | `install the mic extra` | `uv sync --extra mic` |
 | 2 | `cannot open microphone: Error querying device -1` | No input device visible. On WSL2, do the mic setup above |
+| 2 | `cannot open microphone: ... Wait timed out` | The mic didn't start, even after one automatic retry. Run it again. If it keeps failing, run `wsl --shutdown` from Windows |
 | 1 | `session allocator returned 401 ... token_invalid` | The token is wrong or expired. Make a new one on huggingface.co → Settings → Access Tokens |
 | 1 | `transcription connection failed` / `socket closed` | Network or server problem. Retry |
 

@@ -54,16 +54,30 @@ async def mic_chunks(*, chunk_ms: int = 200) -> AsyncIterator[bytes]:
     def on_audio(data: bytes, _frames: int, _time: object, _status: object) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, bytes(data))
 
+    stream = None
+    for attempt in (1, 2):
+        try:
+            stream = sd.RawInputStream(
+                samplerate=RATE,
+                channels=1,
+                dtype="int16",
+                blocksize=RATE * chunk_ms // 1000,
+                callback=on_audio,
+            )
+            stream.start()
+            break
+        except sd.PortAudioError as e:
+            if stream is not None:
+                stream.close()
+                stream = None
+            if attempt == 2:
+                raise RuntimeError(f"cannot open microphone: {e}") from e
+            # WSLg's Pulse source can be asleep; the first start may time out (-9987).
+            await asyncio.sleep(0.5)
+    assert stream is not None
     try:
-        stream = sd.RawInputStream(
-            samplerate=RATE,
-            channels=1,
-            dtype="int16",
-            blocksize=RATE * chunk_ms // 1000,
-            callback=on_audio,
-        )
-    except sd.PortAudioError as e:
-        raise RuntimeError(f"cannot open microphone: {e}") from e
-    with stream:
         while True:
             yield await queue.get()
+    finally:
+        stream.stop()
+        stream.close()

@@ -1,7 +1,9 @@
 import sys
 import types
 import wave
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -64,4 +66,52 @@ async def test_mic_open_failure_is_runtime_error(monkeypatch: pytest.MonkeyPatch
     fake = types.SimpleNamespace(PortAudioError=PortAudioError, RawInputStream=refuse)
     monkeypatch.setitem(sys.modules, "sounddevice", fake)
     with pytest.raises(RuntimeError, match="sample rate"):
+        [c async for c in mic_chunks()]
+
+
+async def test_mic_retries_once_when_stream_start_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PortAudioError(Exception):
+        pass
+
+    starts: list[int] = []
+
+    class FlakyStream:
+        def __init__(self, callback: Any, **_kw: object) -> None:
+            self.callback = callback
+
+        def start(self) -> None:
+            starts.append(1)
+            if len(starts) == 1:
+                raise PortAudioError("Error starting stream: Wait timed out")
+            self.callback(b"\x01\x00", 1, None, None)
+
+        def stop(self) -> None: ...
+
+        def close(self) -> None: ...
+
+    fake = types.SimpleNamespace(PortAudioError=PortAudioError, RawInputStream=FlakyStream)
+    monkeypatch.setitem(sys.modules, "sounddevice", fake)
+    gen = cast(AsyncGenerator[bytes, None], mic_chunks())
+    assert await anext(gen) == b"\x01\x00"
+    await gen.aclose()
+    assert len(starts) == 2
+
+
+async def test_mic_start_failure_is_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class PortAudioError(Exception):
+        pass
+
+    class DeadStream:
+        def __init__(self, **_kw: object) -> None: ...
+
+        def start(self) -> None:
+            raise PortAudioError("Error starting stream: Wait timed out")
+
+        def close(self) -> None: ...
+
+    fake = types.SimpleNamespace(PortAudioError=PortAudioError, RawInputStream=DeadStream)
+    monkeypatch.setitem(sys.modules, "sounddevice", fake)
+    with pytest.raises(RuntimeError, match="cannot open microphone.*timed out"):
         [c async for c in mic_chunks()]
