@@ -89,6 +89,15 @@ Use exactly one of `--mic`, `--stdin`, `--file`.
    ```
    Press Ctrl-C to stop. `-audio_buffer_size 50` keeps the delay low (50 ms instead of DirectShow's default 500 ms).
 
+**Test a recording end to end** (record 5 s, listen, transcribe):
+```bash
+ffmpeg.exe -y -hide_banner -loglevel error -f dshow -i audio="Headset (soundcore R60i NC)" \
+  -t 5 -ac 1 -ar 24000 "$(wslpath -w data)\\test.wav"     # speak now
+ffplay.exe -autoexit -nodisp "$(wslpath -w data/test.wav)"  # hear it in your headset
+uv run reachy-demo transcribe --file data/test.wav          # should print what you said
+```
+If you hear nothing in step 2, the problem is in Windows (see below), not in this app. To check the mic with no WSL involved at all, record with the Windows **Sound Recorder** app.
+
 **Check that the mic isn't silent** (speak during the 3 s):
 ```bash
 ffmpeg.exe -hide_banner -loglevel error -f dshow -i audio="Headset (soundcore R60i NC)" -t 3 -ac 1 -ar 24000 -f s16le - \
