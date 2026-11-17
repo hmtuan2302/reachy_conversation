@@ -18,7 +18,8 @@ robot = [
 ]
 perception = ["mediapipe>=0.10", "opencv-python-headless>=4.10"]
 speaker = ["sherpa-onnx>=1.10"]          # speaker-embedding gate
-mic = ["sounddevice>=0.5"]               # laptop mic for `translate --mic`
+mic = ["sounddevice>=0.5"]
+vieneu = ["vieneu>=3.7"]                 # local VieNeu-TTS v3 Turbo (TTS_PROVIDER=vieneu)
 
 [project.scripts]
 reachy-demo = "reachy_demo.__main__:main"
@@ -51,7 +52,7 @@ strict = true
 files = ["src/reachy_demo", "tests"]
 # SDK / model libs ship without stubs
 [[tool.mypy.overrides]]
-module = ["reachy_mini.*", "reachy_mini_dances_library.*", "mediapipe.*", "cv2.*", "sherpa_onnx.*", "onnxruntime.*", "sounddevice.*"]
+module = ["reachy_mini.*", "reachy_mini_dances_library.*", "mediapipe.*", "cv2.*", "sherpa_onnx.*", "onnxruntime.*", "sounddevice.*", "vieneu.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

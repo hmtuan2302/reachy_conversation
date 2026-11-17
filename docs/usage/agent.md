@@ -31,10 +31,12 @@ HF_TOKEN=hf_...              # speech → text (Pollen's Hugging Face server)
 DEEPSEEK_API_KEY=sk-...      # the LLM; get one at platform.deepseek.com
 # LLM_MODEL=deepseek-chat    # optional: deepseek-chat (default, fastest) | deepseek-v4-pro (stronger, thinks first, slower)
 # LLM_BASE_URL=https://api.deepseek.com   # optional: any OpenAI-compatible endpoint
-GEMINI_API_KEY=...           # text → speech (not needed with --no-speak); aistudio.google.com
+GEMINI_API_KEY=...           # text → speech (not needed with --no-speak or TTS_PROVIDER=vieneu); aistudio.google.com
+# TTS_PROVIDER=vieneu        # local VieNeu-TTS v3 Turbo instead of Gemini, see speak.md
 # TTS_VOICE=Kore             # optional Gemini voice (e.g. Kore, Puck)
 # TTS_MODEL=gemini-3.8-flash-tts
 # TTS_PLAYER=none            # optional: save WAVs only, don't play. Default plays through Windows ffplay.exe
+# SAVE_SPEECH=off            # optional: don't save each answer to data/speech/ (no "(saved ...)" line)
 # MEMORY=off                 # optional: no long-term memory (see memory.md)
 ```
 
@@ -235,6 +237,27 @@ Times were measured 2026-11-16 with a test image and the full agent round trip. 
 - On exit (Ctrl-C, an error or the end of input), whatever runs, even a dance, ends at once. The head eases to neutral, then is lowered into the robot's rest pose (2 s, antennas folded, the same pose as the SDK's `goto_sleep()`). Only then are the motors disabled, so the head doesn't drop. It doesn't wait for a dance to finish.
 - **Motors stay off after exit.** The head rests in the sleep pose, and the next app or script must call `mini.enable_motors()` before it moves anything. `agent --robot` does that at startup. Your own scripts need it too, or the robot ignores their moves.
 
+## Voice cloning
+
+With `TTS_PROVIDER=vieneu` ([speak.md](speak.md#local-model-vieneu-tts-v3-turbo)), Reachy can answer in your own voice.
+
+```
+you: clone giọng của tôi đi
+bot: Được rồi, từ giờ mình sẽ nói bằng giọng của bạn.     ← spoken in your voice
+...
+you: đừng dùng giọng tôi nữa
+bot: Ok, mình quay lại giọng cũ nhé.                       ← back to the preset voice
+```
+
+- The mic keeps the last 10 s of your speech in memory, counting only moments when you were talking. "Clone my voice" (in any wording, Vietnamese or English) makes the agent call `clone_voice`, which saves that audio to `data/voice/clone.wav`.
+- It needs at least 3 s of your speech. If you've just started talking, Reachy asks you to say a bit more, and then you ask again. Talking longer before asking gives a better clone, because VieNeu uses up to 8 s.
+- While `data/voice/clone.wav` exists, every answer is spoken in that voice, even after a restart. "Stop using my voice" calls `stop_cloning_voice`, which deletes the file. Deleting the file by hand does the same.
+- The first answer in a new voice takes about 1.5 s longer, while VieNeu encodes the clip. After that it's as fast as a preset voice.
+- Use a headset: if the speaker's sound reaches the mic, Reachy's own voice can end up in the sample.
+- Owner-only (like memory changes). Until speaker ID exists, everyone counts as the owner.
+- To test without recording yourself, set a fixed WAV in `.env`: `CLONE_AUDIO=data/OSR_us_000_0010_8k.wav`. Then "clone my voice" uses that file instead of the mic, so it also works with `--type`, and "stop cloning" turns it off as usual. Any sample rate works, and VieNeu uses up to 8 s. Leave it empty to clone your real voice from the mic.
+- Not available with Gemini TTS or `--no-speak`. With `--type` and no `CLONE_AUDIO`, there's no mic sample, so it answers "heard 0 s".
+
 ## Debug recording (saved on exit)
 
 When you use `--mic` or `--stdin`, everything the app sent for transcription is saved when it exits: on Ctrl-C, on an error, or at the end of the input:
@@ -262,7 +285,7 @@ If it plays back as silence, the mic route isn't delivering sound (see the mic s
 | `bot: (error: DeepSeek returned 401: ...)` | The key is wrong or revoked. It **keeps listening**, so fix `.env` and restart |
 | `bot: (error: DeepSeek returned 402: ...)` | Out of DeepSeek balance. Top up at platform.deepseek.com |
 | `bot: ... (error: DeepSeek request failed: ...)` | Network dropped mid-answer. The partial answer stays on screen but isn't remembered, and listening continues |
-| `config error: GEMINI_API_KEY is required` (exit 2) | Add the Gemini key, or run with `--no-speak` |
+| `config error: GEMINI_API_KEY is required` (exit 2) | Add the Gemini key, run with `--no-speak`, or set `TTS_PROVIDER=vieneu` ([speak.md](speak.md)) |
 | `  (speech error: Gemini TTS returned 4xx: ...)` | The Gemini key is wrong (400/403) or the quota is used up (429). The text answer is already shown, and it keeps listening |
 | `  (speech error: cannot start player 'ffplay.exe' ...)` | Install Windows ffmpeg, or set `TTS_PLAYER`. The WAV is still saved |
 | `config error: ROBOT_HOST is required` (exit 2) | Set the robot's IP in `.env`, or drop `--robot` |

@@ -33,12 +33,12 @@ def speech_path(directory: Path, n: int) -> Path:
 async def play_and_save(
     chunks: AsyncIterator[bytes],
     *,
-    path: Path,
+    path: Path | None,
     player_cmd: str | None,
     gain: Callable[[], float] | None = None,
     lead_s: float = 0.2,
-) -> Path:
-    """Play chunks as they arrive (if `player_cmd`), and always save everything received to `path`.
+) -> Path | None:
+    """Play chunks as they arrive (if `player_cmd`); save everything received to `path`, if set.
 
     Playback is paced to stay only `lead_s` ahead of the speaker, so `gain()` (read per 100 ms
     piece) changes what is heard soon. The saved WAV is unscaled. Source errors are re-raised
@@ -79,7 +79,8 @@ async def play_and_save(
                     problem = "player exited before the audio ended"
         finished = True
     finally:
-        save_wav(path, bytes(pcm))
+        if path:
+            save_wav(path, bytes(pcm))
         if proc:
             if finished:
                 await _finish(proc)
@@ -90,7 +91,7 @@ async def play_and_save(
     if proc and proc.returncode and not problem:
         problem = f"player exited with code {proc.returncode}"
     if problem:
-        raise PlayerError(f"{problem} (audio saved to {path})")
+        raise PlayerError(f"{problem} (audio saved to {path})" if path else problem)
     return path
 
 

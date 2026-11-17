@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from functools import partial
+from pathlib import Path
 from typing import TextIO
 
 from dotenv import find_dotenv, load_dotenv
@@ -29,6 +30,7 @@ from reachy_demo.agent.llm import (
 )
 from reachy_demo.agent.tools import Toolbox, ToolSet, camera, head
 from reachy_demo.agent.tools import memory as memory_tools
+from reachy_demo.agent.tools import voice as voice_tools
 from reachy_demo.audio.player import PlayerError
 from reachy_demo.audio.vad import EnergyVAD
 from reachy_demo.memory.consolidate import Consolidator
@@ -38,7 +40,7 @@ from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
 from reachy_demo.robot.adapter import connect_robot
 from reachy_demo.robot.dances import load_dances
 from reachy_demo.robot.motion import Motion
-from reachy_demo.voice.speak_cli import speaker_from_env
+from reachy_demo.voice.speak_cli import speaker_from_env, uses_gemini
 from reachy_demo.voice.transcribe import transcribe_stream
 from reachy_demo.voice.transcribe_cli import (
     add_source_args,
@@ -202,9 +204,13 @@ async def typed_turns(lines: TextIO) -> AsyncIterator[str]:
             yield text
 
 
-async def _tap(chunks: AsyncIterator[bytes], vad: EnergyVAD) -> AsyncIterator[bytes]:
+async def _tap(
+    chunks: AsyncIterator[bytes], vad: EnergyVAD, speech: voice_tools.SpeechBuffer | None = None
+) -> AsyncIterator[bytes]:
     async for chunk in chunks:
-        vad.feed(chunk)
+        speaking = vad.feed(chunk)
+        if speech:
+            speech.feed(chunk, speaking)
         yield chunk
 
 
@@ -221,7 +227,7 @@ def run(args: argparse.Namespace) -> int:
     # HF_TOKEN: speech-to-text, and the camera's vision model when it runs on the HF server.
     needs_hf = not args.type or (args.robot and vision == "hf")
     needed = (["HF_TOKEN"] if needs_hf else []) + ["DEEPSEEK_API_KEY"]
-    needed += [] if args.no_speak else ["GEMINI_API_KEY"]
+    needed += ["GEMINI_API_KEY"] if not args.no_speak and uses_gemini() else []
     needed += ["ROBOT_HOST"] if args.robot else []
     keys = {name: os.environ.get(name, "").strip() for name in needed}
     for name, value in keys.items():
@@ -241,15 +247,22 @@ def run(args: argparse.Namespace) -> int:
         hangover_ms=int(os.environ.get("VAD_HANGOVER_MS", "").strip() or 450),
     )
     rec = None
+    # Voice cloning needs local TTS (Gemini can't clone). Typed input gives no sample, but the
+    # tools stay so a clone from an earlier run can still be stopped.
+    speech = None if args.no_speak or uses_gemini() else voice_tools.SpeechBuffer()
     if source is None:
         turns = typed_turns(sys.stdin)
     else:
-        audio, rec = recorded(args, _tap(source, vad))
+        audio, rec = recorded(args, _tap(source, vad, speech))
         turns = transcribe_stream(audio, hf_token=keys["HF_TOKEN"])
     speak = (
         None
         if args.no_speak
-        else speaker_from_env(keys["GEMINI_API_KEY"], gain=lambda: DUCK if vad.speaking else 1.0)
+        else speaker_from_env(
+            keys.get("GEMINI_API_KEY", ""),
+            gain=lambda: DUCK if vad.speaking else 1.0,
+            clone=voice_tools.CLONE_WAV,
+        )
     )
     # The stop check always uses the fast non-reasoning model: reasoning models would hit its
     # 2 s timeout every time, and stop would never work.
@@ -269,6 +282,15 @@ def run(args: argparse.Namespace) -> int:
         session, tools_ = memory
         sets.append(tools_)
         prompt += f" {memory_tools.PROMPT}"
+    if speech:
+        # shortcut: everyone counts as the owner until speaker ID (M9) exists, same as memory
+        sample = os.environ.get("CLONE_AUDIO", "").strip()
+        sets.append(
+            voice_tools.VoiceTools(
+                speech, speaker=lambda: OWNER, sample=Path(sample) if sample else None
+            )
+        )
+        prompt += f" {voice_tools.PROMPT}"
 
     def make_agent(sets: list[ToolSet], prompt: str) -> Agent:
         tools = Toolbox(*sets) if sets else None
