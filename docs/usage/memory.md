@@ -249,7 +249,7 @@ An answer counts as correct when it contains any `expect` word (case and accents
 | `config error: DEEPSEEK_API_KEY is required` from `memory eval` (exit 2) | Add the key to `.env` |
 | `  (memory search: keywords only (install: uv sync --extra embed))` | The `embed` extra isn't installed. Run the [setup](#first-time-setup-search-by-meaning), listing all your extras |
 | `  (memory search: keywords only (model download failed: …))` | No network, wrong `EMBED_MODEL`, or the model is gated: check `HF_TOKEN` and accept the Gemma license on the model page |
-| `  (memory search: keywords only (model load failed: …))` | `EMBED_MODEL` points at a folder without `tokenizer.json` and `onnx/model.onnx`, or the download was cut off: delete the folder under `models/` and restart |
+| `  (memory search: keywords only (model load failed: …))` | `EMBED_MODEL` points at a folder without `tokenizer.json` and `onnx/model.onnx`, or the model files are damaged: delete the folder under `models/` and restart. A cut-off download (quit while downloading) resumes by itself at the next start |
 | `  (memory search: keywords only (EMBED=off))` | You turned it off in `.env` |
 | `  (memory push: off: no embedding model)` | Related memories need the embedding model; see the `memory search` line above it |
 | `  (memory push: off: MEMORY_PUSH=off)` | You turned it off in `.env` |

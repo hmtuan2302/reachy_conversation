@@ -78,7 +78,8 @@ def load_embedder(env: Mapping[str, str]) -> tuple[Embedder | None, str]:
         return None, "keywords only (install: uv sync --extra embed)"
     source = env.get("EMBED_MODEL", "").strip() or DEFAULT_REPO
     path = Path(source) if Path(source).is_dir() else model_dir(source)
-    if not (path / ONNX_FILE).exists() and not Path(source).is_dir():
+    # No weights file means a cut-off download; snapshot_download resumes it.
+    if not (path / (ONNX_FILE + "_data")).exists() and not Path(source).is_dir():
         try:
             huggingface_hub.snapshot_download(
                 source,

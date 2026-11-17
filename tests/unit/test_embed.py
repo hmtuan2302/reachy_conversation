@@ -29,6 +29,21 @@ def test_load_embedder_download_error(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert status.startswith("keywords only (model download failed") and "401" in status
 
 
+def test_load_embedder_resumes_cut_off_download(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import huggingface_hub
+
+    calls: list[object] = []
+    monkeypatch.chdir(tmp_path)
+    graph = embed.model_dir(embed.DEFAULT_REPO) / embed.ONNX_FILE
+    graph.parent.mkdir(parents=True)
+    graph.write_bytes(b"graph only")  # model.onnx without model.onnx_data: an interrupted download
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda *a, **k: calls.append(a))
+    embed.load_embedder({})
+    assert calls  # downloaded again, not loaded half-finished
+
+
 def test_load_embedder_bad_local_folder(tmp_path: Path) -> None:
     e, status = embed.load_embedder({"EMBED_MODEL": str(tmp_path)})
     assert e is None and status.startswith("keywords only (model load failed")
