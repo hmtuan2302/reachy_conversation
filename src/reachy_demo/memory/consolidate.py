@@ -13,12 +13,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from reachy_demo.memory.prompts import DECIDE, EXTRACT, ChatFn, ask_json
+from reachy_demo.memory.prompts import DECIDE, DESCRIBE, EXTRACT, ChatFn, ask_json
 from reachy_demo.memory.store import Clock, MemoryStore, Speaker, content_words, own_name_fact
 
 log = logging.getLogger(__name__)
 
 CATEGORIES = frozenset({"bio", "preference", "relation", "plan", "setting", "other"})
+# Facts about who the owner is; a change to one rewrites people.description.
+SELF = frozenset({"bio", "preference"})
 # A turn made only of these words is small talk or a robot command: nothing to remember.
 _SMALL_TALK_TEXT = """
     hi hello hey bye goodbye thanks thank ok okay yes no yeah yep nope sure cool nice great good
@@ -66,9 +68,12 @@ class Consolidator:
         event_id: int | None = None,
         explicit: bool = False,
     ) -> list[Change]:
-        """Store what's worth keeping from one user turn; `explicit` = asked to remember it."""
-        if speaker.role != "owner":
-            return []  # guests never write memory (spec §5.4)
+        """Store what's worth keeping from one user turn; `explicit` = asked to remember it.
+
+        Owner: facts, name, follow-ups, and the description when a bio/preference fact changed.
+        Guest: only facts, stored under the guest (never the owner's).
+        """
+        owner = speaker.role == "owner"
         person = self._store.person(speaker.person_id)
         name = person.name if person else None
         today = datetime.fromtimestamp(self._clock()).strftime("%A %Y-%m-%d")
@@ -78,13 +83,16 @@ class Consolidator:
             who=name or '"The owner"',
         )
         user = f"Speaker said: {text}\nRobot answered: {answer or '(nothing)'}"
+        open_before = self._store.all_open_follow_ups(speaker.person_id) if owner else []
+        if open_before:
+            user += "\nOpen follow-ups:\n" + "\n".join(f"{f.id}: {f.text}" for f in open_before)
         data = await ask_json(self._chat, system, user, timeout_s=self._timeout_s)
         if data is None:
             log.warning("memory extract failed", extra={"event_id": event_id})
             return []
 
         old_name = name
-        if isinstance(new_name := data.get("name"), str) and new_name.strip():
+        if owner and isinstance(new_name := data.get("name"), str) and new_name.strip():
             name = new_name.strip()
             self._store.set_name(speaker.person_id, name)
             # The name lives in people only: close any "the owner's name is X" fact.
@@ -92,8 +100,8 @@ class Consolidator:
                 if own_name_fact(f.text, old_name, name):
                     self._store.invalidate_fact(f.id, valid_to=None, replaced_by=None)
 
-        open_before = self._store.all_open_follow_ups(speaker.person_id)
         changes: list[Change] = []
+        about_self = False
         for raw in data.get("facts") or []:
             cand = _candidate(raw, name)
             if cand is None or own_name_fact(cand["text"], old_name, name):
@@ -101,7 +109,16 @@ class Consolidator:
             if cand["sensitive"] and not explicit:
                 log.info("memory skipped a sensitive fact (not asked to remember)")
                 continue
-            changes.append(await self._apply(cand, speaker, event_id))
+            change = await self._apply(cand, speaker, event_id)
+            changes.append(change)
+            about_self |= change.action != "NOOP" and cand["category"] in SELF
+
+        if not owner:
+            if event_id is not None:
+                self._store.mark_consolidated(event_id)
+            return changes
+        if about_self:
+            await self.describe(speaker, name)
 
         for raw in data.get("follow_ups") or []:
             if isinstance(raw, dict) and isinstance(raw.get("text"), str) and raw["text"].strip():
@@ -109,10 +126,44 @@ class Consolidator:
                     speaker.person_id, raw["text"].strip(), parse_date(raw.get("due"))
                 )
 
-        self._close_follow_ups(open_before, [c.text for c in changes if c.action != "NOOP"], name)
+        # The LLM judges meaning; ids it wasn't given are ignored. Word overlap stays as backup.
+        raw = data.get("answered")
+        # The model sometimes writes ids as strings ("1"); bools and other junk are skipped.
+        answered = (
+            {int(i) for i in raw if isinstance(i, int | str) and str(i).strip().isdigit()}
+            if isinstance(raw, list)
+            else set()
+        )
+        for fu in open_before:
+            if fu.id in answered:
+                self._store.close_follow_up(fu.id)
+        still_open = [f for f in open_before if f.id not in answered]
+        self._close_follow_ups(still_open, [c.text for c in changes if c.action != "NOOP"], name)
         if event_id is not None:
             self._store.mark_consolidated(event_id)
         return changes
+
+    async def describe(self, speaker: Speaker, name: str | None) -> None:
+        """Rewrite people.description from the owner's current bio/preference facts."""
+        facts = [
+            f.text
+            for f in self._store.current_facts(speaker, speaker.person_id)
+            if f.category in SELF
+        ]
+        if not facts:
+            return
+        who = name or "the owner"
+        data = await ask_json(
+            self._chat,
+            DESCRIBE.format(who=who),
+            "\n".join(f"- {t}" for t in facts),
+            timeout_s=self._timeout_s,
+        )
+        text = (data or {}).get("description")
+        if isinstance(text, str) and text.strip():
+            self._store.set_description(speaker.person_id, text)
+        else:
+            log.warning("memory describe failed; description unchanged")
 
     async def _apply(self, cand: dict[str, Any], speaker: Speaker, event_id: int | None) -> Change:
         similar = self._store.search_facts(
@@ -169,9 +220,22 @@ class Consolidator:
                 return Change("INVALIDATE", fact_id, cand["text"])
             return Change("ADD", fact_id, cand["text"])
 
+    def close_mentioned(self, speaker: Speaker, *texts: str) -> None:
+        """Close the owner's follow-ups that this turn asked or answered (user text or reply).
+
+        Runs on every turn, before the small-talk gate: "yes" alone never reaches extraction,
+        but the robot's reply to it ("I'm back to my own voice") shows the follow-up is done.
+        """
+        if speaker.role != "owner":
+            return
+        person = self._store.person(speaker.person_id)
+        open_now = self._store.all_open_follow_ups(speaker.person_id)
+        self._close_follow_ups(open_now, list(texts), person.name if person else None)
+
     def _close_follow_ups(self, open_before: list[Any], texts: list[str], name: str | None) -> None:
-        """A new fact that answers an open follow-up closes it (word overlap, spec §7.7)."""
-        ignore = content_words(name or "") | {"owner"}
+        """A text sharing enough words with an open follow-up closes it (word overlap, §7.7)."""
+        # "Ask whether Tuan wants the robot ...": these words say nothing about the topic.
+        ignore = content_words(name or "") | {"owner", "ask", "asks", "robot", "whether"}
         for fu in open_before:
             need = content_words(fu.text) - ignore
             if not need:

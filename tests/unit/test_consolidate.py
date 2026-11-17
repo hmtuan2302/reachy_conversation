@@ -128,10 +128,58 @@ async def test_llm_error_is_swallowed() -> None:
     assert await c.consolidate("I like tea", OWNER) == []
 
 
-async def test_guest_never_writes() -> None:
-    _, c, chat = _setup()
-    assert await c.consolidate("I like tea", Speaker(2, "guest")) == []
-    assert chat.calls == []
+async def test_guest_facts_are_stored_under_the_guest_only() -> None:
+    store, c, chat = _setup(
+        _extract(
+            _fact("Lan likes tea.", category="preference"),
+            name="Lan",
+            follow_ups=[{"text": "Ask Lan about tea", "due": None}],
+        )
+    )
+    store._db.execute("INSERT INTO people(id, role) VALUES (2, 'guest')")
+    guest = Speaker(2, "guest")
+    changes = await c.consolidate("I'm Lan, I like tea", guest)
+    assert [ch.action for ch in changes] == ["ADD"]
+    assert [f.text for f in store.current_facts(guest, 2)] == ["Lan likes tea."]
+    assert store.current_facts(OWNER, OWNER_ID) == []
+    # just facts: no name, no follow-up, no description, and only the extract call
+    g = store.person(2)
+    assert g is not None and (g.name, g.description) == (None, "")
+    assert store.all_open_follow_ups(2) == [] and len(chat.calls) == 1
+
+
+async def test_owner_self_fact_rewrites_description() -> None:
+    store, c, chat = _setup(
+        _extract(_fact("Tuan is calm and curious.", category="bio")),
+        {"action": "ADD"},  # decide: the engineer fact matches on the subject "Tuan"
+        {"description": "Tuan is a calm, curious engineer."},
+    )
+    store.add_fact(
+        subject_person_id=OWNER_ID,
+        subject_text="Tuan",
+        text="Tuan works as an engineer.",
+        category="bio",
+        source="said",
+    )
+    store.add_fact(
+        subject_person_id=OWNER_ID,
+        subject_text="Samon",
+        text="Samon is a Corgi.",
+        category="relation",
+        source="said",
+    )
+    await c.consolidate("I'm calm and curious", OWNER)
+    p = store.person(OWNER_ID)
+    assert p is not None and p.description == "Tuan is a calm, curious engineer."
+    sent = chat.calls[-1][1]["content"]
+    assert "engineer" in sent and "curious" in sent and "Corgi" not in sent
+
+
+async def test_plan_fact_leaves_description_alone() -> None:
+    store, c, chat = _setup(_extract(_fact("Tuan has an exam tomorrow.", category="plan")))
+    await c.consolidate("I have an exam tomorrow", OWNER)
+    p = store.person(OWNER_ID)
+    assert p is not None and p.description == "" and len(chat.calls) == 1
 
 
 @pytest.mark.parametrize(("explicit", "stored"), [(False, 0), (True, 1)])
@@ -241,3 +289,22 @@ def test_own_name_fact(text: str, own: bool) -> None:
     from reachy_demo.memory.store import own_name_fact
 
     assert own_name_fact(text, "Ha", "Tuan") is own
+
+
+async def test_llm_closes_follow_ups_it_says_were_answered() -> None:
+    store, c, chat = _setup()
+    exam = store.add_follow_up(OWNER_ID, "Ask how the exam went.", None)
+    trip = store.add_follow_up(OWNER_ID, "Ask how the trip to Da Lat was.", None)
+    # the id as a string counts; 999 was never offered and "x" isn't an id
+    chat.replies.append(_extract(answered=[str(exam), 999, "x"]))
+    await c.consolidate("thi ổn rồi, được 9 điểm", OWNER)
+    assert [f.id for f in store.all_open_follow_ups(OWNER_ID)] == [trip]
+    sent = chat.calls[0][1]["content"]
+    assert f"{exam}: Ask how the exam went." in sent and f"{trip}: Ask how the trip" in sent
+
+
+async def test_bad_answered_field_closes_nothing() -> None:
+    store, c, chat = _setup(_extract(answered="all"))
+    store.add_follow_up(OWNER_ID, "Ask how the exam went.", None)
+    await c.consolidate("I went to the market today", OWNER)
+    assert len(store.all_open_follow_ups(OWNER_ID)) == 1

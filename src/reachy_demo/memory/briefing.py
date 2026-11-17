@@ -70,6 +70,8 @@ def build_briefing(
         )
     last = store.last_turn_time(speaker.person_id)
     head += f"; last talked {ago(now - last)}." if last else "; this is your first conversation."
+    if person and person.description:
+        head += f" About them: {person.description}"
 
     ranked = sorted(
         store.current_facts(speaker, speaker.person_id), key=lambda f: score(f, now), reverse=True

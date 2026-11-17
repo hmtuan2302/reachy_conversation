@@ -190,11 +190,23 @@ async def test_short_greeting_session_needs_no_llm_and_stays_out_of_briefing() -
     assert await summarize_session(store, chat, "g", OWNER_ID, clock) is None  # idempotent
 
 
-async def test_guest_turns_are_not_consolidated() -> None:
+async def test_guest_turns_are_consolidated_under_the_guest() -> None:
     from reachy_demo.memory.store import Speaker
 
     s, store, _, chat = _session(speaker=lambda: Speaker(OWNER.person_id + 1, "guest"))
     store._db.execute("INSERT INTO people(id, role) VALUES (2, 'guest')")
     s.submit(_turn("I have a sister named Mai who likes tea"))
     await _run_jobs(s)
-    assert "extract" not in chat.kinds
+    assert "extract" in chat.kinds  # facts land under the guest (tested in test_consolidate)
+
+
+async def test_short_yes_closes_the_follow_up_its_reply_settles() -> None:
+    s, store, _, chat = _session()
+    store.set_name(OWNER_ID, "Tuan")
+    fu = store.add_follow_up(
+        OWNER_ID, "Ask whether Tuan wants the robot to switch back to its own voice.", None
+    )
+    other = store.add_follow_up(OWNER_ID, "Ask how the math exam went.", None)
+    s.submit(_turn("yes", "All set, I'm back to my own voice. Anything else, Tuan?"))
+    assert [f.id for f in store.all_open_follow_ups(OWNER_ID)] == [other]
+    assert fu != other and chat.kinds == []  # "yes" is still not sent to extraction

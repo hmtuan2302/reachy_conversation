@@ -14,15 +14,15 @@ alias run='uv run reachy-demo agent --type --no-speak'
 facts() { sqlite3 -header -column "$MEMORY_DB" "select id, text, category, sensitive, expired is not null as old from facts"; }
 eps()   { sqlite3 -header -column "$MEMORY_DB" "select session_id, datetime(start, 'unixepoch', 'localtime') as start, importance, summary from episodes"; }
 fus()   { sqlite3 -header -column "$MEMORY_DB" "select id, text, datetime(due, 'unixepoch', 'localtime') as due, done is not null as done from follow_ups"; }
-who()   { sqlite3 -header -column "$MEMORY_DB" "select id, role, name, aliases_json as earlier_names from people"; }
+who()   { sqlite3 -header -column "$MEMORY_DB" "select id, role, name, aliases_json as earlier_names, description from people"; }
 ```
 
 | Helper | Shows | Columns to watch |
 |---|---|---|
-| `who` | People: your current name and earlier names | Names live **only** here, never in `facts` |
+| `who` | People: your current name, earlier names and description | Names live **only** here, never in `facts`. `description` is rewritten from your bio/preference facts |
 | `facts` | Stored facts | `old = 1`: replaced by a newer fact. `sensitive = 1`: kept out of the prompt |
 | `eps` | One summary per conversation | `importance = 0`: small talk only, not shown to the robot |
-| `fus` | Follow-ups ("Ask how the exam went") | `done = 1`: answered, won't be asked again |
+| `fus` | Follow-ups ("Ask how the exam went") | `done = 1`: asked or answered in a turn (your words or Reachy's reply), won't be brought up again |
 
 `sqlite3` reads double quotes as column names, so the times use single quotes (`'unixepoch'`). That's why these are shell functions and not aliases. Wait 2–3 seconds after a turn before you check, because memory is written in the background.
 
@@ -71,7 +71,10 @@ If you've typed text without pressing Enter, the first Ctrl-D only sends that te
 |---|---|---|
 | 7 | **Summary at exit.** Talk about 3 topics → Ctrl-D → `eps` → `run` → "What did we talk about today?" | `eps` shows one summary. The answer lists the topics |
 | 8 | **Follow-up.** "Ngày mai tôi có bài thi toán, hơi lo." → Ctrl-D → `fus` → `run` → "Hi" | `fus` shows "Ask how the exam went", due tomorrow. On the next run Reachy may ask about the exam. The window is ±2 days, so it works today and tomorrow |
-| 9 | **Follow-up closes.** After 8: "The exam went well." → wait 3 s → `fus` | `done = 1`. If it stays 0, the word overlap missed it (known limit) |
+| 9 | **Follow-up closes.** After 8: "The exam went well." → wait 3 s → `fus` | `done = 1` |
+| 9a | **Closes with other words.** After 8 (fresh follow-up): "thi ổn rồi, được 9 điểm" or "The test went fine, I passed." → wait 3 s → `fus` | `done = 1`: the LLM matched it, although no word is shared with "Ask how the exam went" |
+| 9c | **A mention doesn't close it.** After 8: "I'll study for the exam tonight." → wait 3 s → `fus` | Still `done = 0` (unless Reachy's reply asks how the exam went: asking it closes it too) |
+| 9b | **Short answer closes it.** Get a yes/no follow-up (e.g. after "clone my voice", Reachy asks whether to switch back) → restart → Reachy asks it → "yes" → `fus` | `done = 1`, from Reachy's reply ("I'm back to my own voice"), although "yes" alone isn't stored |
 | 10 | **Reload after restart (< 2 h).** "My favourite colour is green." → Ctrl-D → `run` → "What did I just tell you?" | It knows, from the reloaded turns, without calling `recall` |
 | 11 | **Small talk only.** Fresh run: "hi" → "thanks" → Ctrl-D → `eps` | An "Only small talk." row with `importance = 0`. The next run doesn't mention it |
 
@@ -95,7 +98,24 @@ If you've typed text without pressing Enter, the first Ctrl-D only sends that te
 | 20 | **10-minute gap.** Talk → stay idle 11 min (don't exit) → say something → `eps` | The first conversation is summarized without exiting, and a new one starts |
 | 21 | **By voice.** Repeat 1–5 with `--mic` or `--stdin` (see [agent.md](agent.md)), mixing Vietnamese and English | Same results. Speech-to-text mistakes in names ("Tuấn" → "Tuan") are fine |
 
-## E. Automatic
+## E. Your description
+
+`who` shows the `description` column. It's rewritten from your `bio` and `preference` facts after a turn that changes one, so wait about 5 s before checking (two background LLM calls).
+
+| # | Steps | Expected |
+|---|---|---|
+| 22 | **Written.** Fresh DB: `run` → "Hi, I'm Tuấn. I'm a calm, curious software engineer and I love black coffee." → wait 5 s → `who` | `description` is 1–3 sentences that mention calm, curious, engineer and black coffee. `facts` still has each one as its own row |
+| 23 | **Grows.** After 22: "I also hate crowded places and I'm a night owl." → wait → `who` | The description now also mentions crowded places and night owl, and still has the earlier details |
+| 24 | **Follows a correction.** After 23: "Actually I stopped drinking coffee, I prefer green tea now." → wait → `facts`, `who` | `facts`: the coffee fact has `old = 1` and a tea fact is current. The description mentions tea and not coffee |
+| 25 | **Not changed by plans, pets or family.** Note the description → "I have an exam on Friday." → "My dog Bin loves tennis balls." → "Mai is my sister." → wait → `who` | The description is unchanged (those are `plan` / `relation` facts) |
+| 26 | **Used after restart.** After 22–24 → restart → "What kind of person am I?" and "What do I like to drink?" | It describes you as in `who`, and says tea |
+| 27 | **No guessed gender.** Look at the description from 22–24 | It uses your name or "they", never "he" or "she" |
+| 28 | **Sensitive stays out.** "Remember that I have diabetes." → wait → `facts`, `who` | `facts` has it with `sensitive = 1`. The description doesn't mention it |
+| 29 | **Existing DB upgrades.** Open a DB made before this change (e.g. the old `data/memory.db`) with `run` → `who` | It works, `description` is empty until your next self-fact, and `memory.db.bak-2` was written next to it |
+
+**Guests.** A guest's own statements go to facts under the guest, and nothing changes your facts or description. There's no speaker ID yet, so everyone counts as you and this can't be tested by hand. It's covered by a unit test: `uv run pytest tests/unit/test_consolidate.py -k guest`.
+
+## F. Automatic
 
 Days-apart questions ("yesterday", "last Tuesday") are slow to test by hand. The scripted eval runs them on a simulated clock (about 1.5 min, real DeepSeek calls):
 
@@ -108,6 +128,8 @@ Add your own cases to `tests/replay/memory_eval.jsonl` ([format](memory.md#testi
 
 ## Most likely to fail
 
-- **Case 9:** follow-ups close by simple word overlap.
+- **Case 24:** if the DECIDE call says ADD instead of INVALIDATE, both coffee and tea stay current and the description may keep both.
+- **Case 25:** a pet or plan sentence the extractor labels `bio` would rewrite the description. It still shouldn't change the meaning.
+- **Case 9c:** if Reachy's reply happens to share 2 topic words with the follow-up, the word fallback closes it.
 - **Case 8:** whether Reachy opens with the exam is up to the LLM, so it may not happen every time.
 - **Case 21:** with laptop speakers, Reachy can hear its own answers, and they get stored as your turns. Use a headset.

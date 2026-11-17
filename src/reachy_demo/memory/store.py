@@ -35,13 +35,14 @@ OWNER = Speaker(OWNER_ID, "owner")
 
 @dataclass(frozen=True)
 class Person:
-    """Identity only. `people` is the single source of truth for a person's name;
-    everything else about them (preferences, language, relations) is a fact."""
+    """`people` is the single source of truth for a person's name. Each thing known about them
+    is a fact; the owner also gets `description`, a short profile rewritten from those facts."""
 
     id: int
     role: str
     name: str | None
     aliases: list[str]  # earlier names, newest last
+    description: str = ""
 
 
 @dataclass(frozen=True)
@@ -208,7 +209,8 @@ def _v2_identity_in_people(db: sqlite3.Connection, now: float) -> None:
 
 
 Migration = str | Callable[[sqlite3.Connection, float], None]
-MIGRATIONS: list[Migration] = [SCHEMA_V1, _v2_identity_in_people]
+V3_DESCRIPTION = "ALTER TABLE people ADD COLUMN description TEXT NOT NULL DEFAULT '';"
+MIGRATIONS: list[Migration] = [SCHEMA_V1, _v2_identity_in_people, V3_DESCRIPTION]
 
 # Small EN + VN list: words that would make every fact match. Not exhaustive on purpose.
 _STOPWORDS_TEXT = """
@@ -314,14 +316,14 @@ class MemoryStore:
 
     def person(self, person_id: int) -> Person | None:
         row = self._db.execute(
-            "SELECT id, role, name, aliases_json FROM people WHERE id=?", (person_id,)
+            "SELECT id, role, name, aliases_json, description FROM people WHERE id=?", (person_id,)
         ).fetchone()
         return _person(row) if row else None
 
     def find_person(self, name: str) -> Person | None:
         """By current or earlier name, ignoring case."""
         key = name.strip().lower()
-        for row in self._db.execute("SELECT id, role, name, aliases_json FROM people"):
+        for row in self._db.execute("SELECT id, role, name, aliases_json, description FROM people"):
             p = _person(row)
             if any(n.lower() == key for n in [p.name or "", *p.aliases] if n):
                 return p
@@ -338,6 +340,11 @@ class MemoryStore:
         self._db.execute(
             "UPDATE people SET name=?, aliases_json=? WHERE id=?",
             (name, json.dumps(aliases, ensure_ascii=False), person_id),
+        )
+
+    def set_description(self, person_id: int, description: str) -> None:
+        self._db.execute(
+            "UPDATE people SET description=? WHERE id=?", (description.strip(), person_id)
         )
 
     # -- event log ---------------------------------------------------------------------------
@@ -678,7 +685,9 @@ def _scope(sql: str, args: list[Any], speaker: Speaker) -> tuple[str, list[Any]]
 
 
 def _person(r: sqlite3.Row) -> Person:
-    return Person(r["id"], r["role"], r["name"], json.loads(r["aliases_json"]))
+    return Person(
+        r["id"], r["role"], r["name"], json.loads(r["aliases_json"]), r["description"] or ""
+    )
 
 
 def _fact(r: sqlite3.Row) -> Fact:

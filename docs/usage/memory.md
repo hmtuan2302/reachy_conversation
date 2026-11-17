@@ -38,6 +38,10 @@ Small talk and robot commands ("hi", "thanks", "turn left", "dance") are logged 
 
 **One source of truth for each thing.** Who you are (your name, and the names you used before) lives only on your person record, in the `people` table. Everything else about you lives only in facts, including the language you want. The newest "my name is …" or "call me …" wins: Reachy switches without asking you to confirm, and the old name is kept as an earlier name ("did I go by another name?" still works). A fact about your own name is never stored.
 
+**Your description.** When you tell Reachy about yourself (who you are, your personality, likes and dislikes), it saves each as a fact and then rewrites your `description` in `people` from all of those facts: up to 3 sentences, such as "Tuan is a calm, curious software engineer who loves black coffee and is a bit of a night owl. Tuan hates crowded places." It goes at the top of Reachy's memory each session. Plans, pets and family don't change it. Correct a fact ("actually I prefer tea now") and the description follows at the next rewrite.
+
+**Other people.** When a guest talks about themselves, only facts are saved, under the guest, never under you. Guests get no name change, follow-ups or description. Until speaker ID exists, everyone counts as the owner, so for now everything goes to you.
+
 **Changes are tracked, not overwritten.** "I moved to Hanoi" closes the old "lives in Saigon" fact instead of deleting it, so "where did I live before?" still works.
 
 ## Voice commands
@@ -116,6 +120,8 @@ Result on 2026-11-17 (`deepseek-chat`, one run, 22 questions):
 | abstention (never mentioned) | 4/4 | 4/4 |
 | **overall** | **22/22** | **20/22** |
 
+Two description questions were added afterwards ("What kind of person am I?" after a personality turn, and the drink after "I prefer green tea now"). With them, memory scored 24/24 on 2026-11-17. The baseline wasn't rerun.
+
 Memory used 1.7 background LLM calls per turn, and building the briefing took under 1 ms. The baseline has no timestamps, so it can't answer "when" questions. It also sends the whole history on every turn, which grows without limit.
 
 Script format, one JSON object per line:
@@ -139,7 +145,9 @@ An answer counts as correct when it contains any `expect` word (case and accents
 
 - **Keyword search, no embeddings.** Facts are stored in English, and the agent searches in English keywords, so Vietnamese and English work together. A very different paraphrase can still miss ("my pet" vs. "dog"). If the eval shows misses, the next step is vector search.
 - **The test set is small** (22 questions, one run) and scored by keyword match. 100% means no regressions on these cases, not that memory is perfect.
-- **Follow-ups close by word overlap.** "thi ổn rồi" closes "Ask how the exam went" only if the new fact shares words with it, so occasionally Reachy may ask twice.
+- **How follow-ups close.** Two checks:
+  - The LLM that already reads each turn for facts also sees your open follow-ups, and says which ones the turn answered. It understands other wording and languages: "thi ổn rồi" or "the test went fine" closes "Ask how the math exam went". Just mentioning the topic ("I'll study for the exam tonight") doesn't close it.
+  - Short turns like "yes" skip that LLM call, so a word match is the fallback. A follow-up closes when your words or Reachy's reply share at least 2 topic words with it. That's why "yes" → "I'm back to my own voice" closes "Ask whether … switch back to its own voice", and also why a follow-up closes once Reachy has asked it.
 - **Background memory:** a memory write can lag a few seconds behind the conversation. When the app is killed (not a clean exit), the rest is finished at the next start.
 - **Forget** deletes facts and their logged turns. A conversation summary that mentioned the forgotten thing stays until you "forget everything".
 - Not built yet (later phases): object locations, reminders, routines, forgetting old memories over time, and the `memory list/show/export` commands. See the [design](../superpowers/specs/2026-11-17-memory-design.md).

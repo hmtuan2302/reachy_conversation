@@ -101,7 +101,8 @@ class MemorySession:
                 person_id=speaker.person_id,
                 session_id=self.session_id,
             )
-            if worth_keeping(user) and speaker.role == "owner":
+            self.consolidator.close_mentioned(speaker, user, answer)
+            if worth_keeping(user):  # guests too: their facts are stored under the guest
                 self._put(("turn", eid, user, answer, speaker))
             else:
                 self.store.mark_consolidated(eid)

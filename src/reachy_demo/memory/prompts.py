@@ -21,7 +21,8 @@ Reply with JSON only:
   "valid_from": "YYYY-MM-DD or null", "valid_to": "YYYY-MM-DD or null",
   "importance": 0.0-1.0, "sensitive": true|false}}],
  "follow_ups": [{{"text": "...", "due": "YYYY-MM-DD or null"}}],
- "name": "speaker's own name or null"}}
+ "name": "speaker's own name or null",
+ "answered": [ids of open follow-ups this turn answers]}}
 Rules:
 - Keep only what the speaker states about themselves, people and pets in their life, their things,
   plans and events, or how they want the robot to behave (category "setting").
@@ -37,7 +38,12 @@ Rules:
   Never also add it as a fact.
 - A language they ask the robot to use is a fact with category "setting", e.g.
   "{who} wants answers in Vietnamese."
-- Nothing worth keeping: {{"facts": [], "follow_ups": [], "name": null}}"""
+- answered: ids from "Open follow-ups" that this turn settles. It is settled when the speaker
+  tells how it went, its result, or their decision, in any language or other words: "thi ổn
+  rồi" and "the test went fine, I passed" both answer "Ask how the math exam went". Not
+  settled: the robot only asking it, or the speaker mentioning the topic without an answer
+  ("I'll study for the exam tonight").
+- Nothing worth keeping: {{"facts": [], "follow_ups": [], "name": null, "answered": []}}"""
 
 DECIDE = """You maintain a robot's long-term memory. A new fact arrived. Compare it with the
 existing facts (id: text) and reply with JSON only, one of:
@@ -48,6 +54,12 @@ existing facts (id: text) and reply with JSON only, one of:
 {"action": "INVALIDATE", "id": N}  - the new fact contradicts or replaces that one (it is no
   longer true, e.g. the person moved or changed their mind)
 Use only ids from the list."""
+
+DESCRIBE = """Write a short profile of {who}, the owner of a home robot, from the facts below:
+who they are, their personality and characteristics, what they like and dislike.
+Use only these facts; never invent. English, at most 3 sentences. Refer to them by name or
+"they"; never guess their gender.
+Reply with JSON only: {{"description": "..."}}"""
 
 SUMMARIZE = """Summarize this conversation between a home robot and {speaker} for the robot's
 long-term memory. Today is {today}. Reply with JSON only:

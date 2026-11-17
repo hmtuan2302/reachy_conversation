@@ -32,3 +32,9 @@
 {"t": "2026-11-10T20:05:00+07:00", "ask": "Mình định đi đâu vào tháng 12?", "expect": ["Da Lat", "Đà Lạt"], "category": "mixed_lang"}
 {"t": "2026-11-10T20:06:00+07:00", "ask": "What breed is Bin?", "expect": ["corgi"], "category": "cross"}
 {"t": "2026-11-10T20:07:00+07:00", "ask": "What is Mai's boyfriend's name?", "expect_none": true, "category": "abstain"}
+{"restart": true}
+{"t": "2026-11-11T21:00:00+07:00", "say": "I'm quite a calm and introverted person, and I'm a night owl."}
+{"t": "2026-11-11T21:01:00+07:00", "say": "Actually I stopped drinking coffee, I prefer green tea now."}
+{"restart": true}
+{"t": "2026-11-12T21:00:00+07:00", "ask": "What kind of person am I?", "expect": ["calm", "introvert", "night owl", "điềm tĩnh", "hướng nội"], "category": "description"}
+{"t": "2026-11-12T21:01:00+07:00", "ask": "What do I like to drink these days?", "expect": ["tea", "trà"], "category": "description"}
