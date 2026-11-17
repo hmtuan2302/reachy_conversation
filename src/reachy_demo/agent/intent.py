@@ -20,7 +20,10 @@ PROMPT = (
     "Decide whether the user wants the robot to stop talking now, in any phrasing "
     '(e.g. "stop", "wait", "enough", "be quiet", "dừng lại", "thôi", "im đi"). '
     "Background talk, fillers, agreement or a question without a stop request are NOT a stop. "
-    'If it is a stop, "rest" is any new request said after the stop command, else "". '
+    'The stop command includes what is stopped: in "stop tracking and mimic me" the '
+    'command is "stop tracking"; in "thôi theo dõi, bắt chước tôi" it is "thôi theo dõi". '
+    'If it is a stop, "rest" is only the new request said after the stop command, in the '
+    'user\'s words (e.g. "mimic me", "bắt chước tôi"), else "". '
     'Reply with JSON only: {"stop": true or false, "rest": "..."}'
 )
 

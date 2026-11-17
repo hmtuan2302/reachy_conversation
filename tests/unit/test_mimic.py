@@ -265,3 +265,19 @@ async def test_tool_refuses_guests_and_bad_arguments() -> None:
     assert await _call(tools, enabled=True) == NOT_OWNER
     assert not mimic.active
     assert str((await _call(tools, enabled=1))["error"]).startswith("bad_arguments")
+
+
+async def test_stop_tracking_then_mimic_in_one_sentence() -> None:
+    """'Stop tracking and mimic me': the stop ends tracking, then the rest starts mimic."""
+    from reachy_demo.attention.follow import Follow
+
+    mimic, motion, poses, _ = _mimic()
+    follow = Follow(motion, lambda: (0.3, 0.0), lambda on: True, poll_s=0.001)
+    assert await follow.start() == (None, True)
+    await _until(lambda: len(poses) > 5)  # tracking
+    assert await mimic.start() == BUSY_LONG  # "mimic me" alone is refused
+    motion.stop()  # what barge-in's on_stop does
+    assert await mimic.start() is None  # the rest of the sentence
+    await _until(lambda: mimic._target is not None and not follow.active)
+    assert mimic.active
+    mimic.stop()

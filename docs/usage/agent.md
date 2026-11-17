@@ -139,6 +139,7 @@ While Reachy answers, the mic keeps listening.
     (stopped)
   ```
 - **"Stop, <question>":** it stops, then answers the question: `stop, what time is it?`
+- **"Stop <what> and <new request>":** it stops that, then does the new request. Use it to switch between dancing, tracking and mimic: `stop tracking and mimic me`, `stop dancing and track my face`, `thôi theo dõi, bắt chước tôi`. The words naming what to stop ("tracking") are part of the stop, so only "mimic me" is passed on. "Mimic me" alone while tracking is refused: say stop first.
 - **Anything else** said while Reachy talks (fillers, side talk, a question without a stop word) is dropped and shown as `  (ignored: …)` after the answer.
 
 The stop takes effect after you finish the sentence: turn end (about 0.5–1.2 s), then the stop check. A turn that is only a stop phrase ("stop", "stop stop", "wait", "enough", "thôi (đi)", "dừng (lại) (đi)", "đủ rồi", "im đi") stops at once. Anything longer ("stop, what time is it?") goes to DeepSeek, which adds about 0.4–1.3 s. Reachy stays at 25% volume meanwhile.
