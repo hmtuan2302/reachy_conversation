@@ -4,7 +4,7 @@ A one-page summary of everything `reachy-demo` can do. Details, setup and errors
 
 **Keep this file current:** every commit that adds or changes a feature updates its row here, and its usage doc.
 
-Last updated: 2026-11-17 (branch `main`, after merging `feat/doa-speaker-verification`).
+Last updated: 2026-11-17 (branch `feat/video-tracking`, face tracking, mimic and object tracking added).
 
 ## Commands
 
@@ -34,10 +34,13 @@ Last updated: 2026-11-17 (branch `main`, after merging `feat/doa-speaker-verific
 | 11 | **Sound direction (DoA)** (`--robot --mic`) | Stores the direction of your last sentence (30 s) and of the last loud sound (2 min), from the robot's mic array. The `look_toward_sound` tool turns head and body toward it (body ±120°, head ±45°, 60°/s). If the spot is out of reach, Reachy says so. | `SOUND_RMS` | [sound-direction.md](usage/sound-direction.md) |
 | 12 | **Memory testing** | Hand-test scenarios with SQLite helpers, plus a scripted eval on a simulated clock. Last result: 54/55. | `MEMORY_DB` | [memory-testing.md](usage/memory-testing.md) |
 | 13 | **Owner mode (speaker verification)** | "Only follow my command" turns it on: each sentence is scored against your voiceprint (CAM++ via sherpa-onnx, CPU, about 50 ms). Guests are ignored, unsure voices are asked to repeat, and `dance` / `look_toward_sound` refuse guests. "Stop following only me" turns it off. Only your voice can switch it. "Am I your boss?" calls `who_is_speaking`, which answers from the voice check. `reachy-demo enroll --file F` saves the voiceprint. | `SPEAKER_MODEL`, `SPEAKER_HIGH`, `SPEAKER_LOW` | [agent.md § Owner mode](usage/agent.md#owner-mode-speaker-verification) |
+| 14 | **Face tracking** (`--robot`) | "Track me" / "follow me": tool `track_face` follows your face with head and body until you say stop. Faces come from the robot's own detector (YuNet on the robot, no laptop CPU). With no face in view, or when someone talks from more than 35° away, it turns toward the voice (DoA). Head turns alone up to 25°, then the body turns too. Other moves are refused while it follows. Owner only in owner mode. | `ROBOT_HOST` | [face-tracking.md](usage/face-tracking.md) |
+| 15 | **Mimic** (`--robot`, camera) | "Mimic me" / "bắt chước tôi": tool `mimic_me` copies your head turn, nod, tilt and lean like a mirror, about 1:1, until you say stop. YuNet finds your face, then MediaPipe reads the head angles on a crop. Smoothed by a one-euro filter and a spring (max 150°/s). Limits: ±35° turn and ±22° nod from facing you (the camera must keep seeing you), ±25° tilt, ±20 mm lean. Owner only in owner mode. | `MIMIC_MODEL`, extra `perception` | [mimic.md](usage/mimic.md) |
+| 16 | **Object tracking** (`--robot`, camera) | "Track my iPhone" / "follow the cup": tool `track_object` finds the object with YOLOX-nano (80 everyday classes). With several candidates, the vision model picks "mine". An OpenCV CSRT tracker then follows it at 15–25 Hz, and the detector corrects it every 1 s. It turns head and body like face tracking until you say stop, and gives up after 10 s unseen. Owner only in owner mode. | `OBJECT_MODEL`, `VISION_PROVIDER`, extra `perception` | [object-tracking.md](usage/object-tracking.md) |
 
 ## Not built yet
 
-From the roadmap in [src/CLAUDE.md](../src/CLAUDE.md): greeting, emotion-aware replies, face tracking/attention, find object, mimic, face check for unsure voices in owner mode, point-and-recognize. Later memory phases are also open: object locations, reminders, routines, and forgetting old memories over time.
+From the roadmap in [src/CLAUDE.md](../src/CLAUDE.md): greeting, emotion-aware replies, attention arbiter, find object, face check for unsure voices in owner mode, point-and-recognize. Later memory phases are also open: object locations, reminders, routines, and forgetting old memories over time.
 
 ## Branches
 
@@ -45,4 +48,4 @@ From the roadmap in [src/CLAUDE.md](../src/CLAUDE.md): greeting, emotion-aware r
 |---|---|
 | `main` | Features 1–13 |
 | `feat/doa-speaker-verification` | Merged into `main` |
-| `feat/video-tracking` | `main` + video tracking (in progress) |
+| `feat/video-tracking` | `main` + face tracking, mimic and object tracking (features 14–16), not merged yet |

@@ -30,11 +30,14 @@ from reachy_demo.agent.llm import (
     chat_events,
     chat_stream,
 )
-from reachy_demo.agent.tools import Toolbox, ToolSet, camera, head
+from reachy_demo.agent.tools import Toolbox, ToolSet, camera, head, track
 from reachy_demo.agent.tools import memory as memory_tools
+from reachy_demo.agent.tools import mimic as mimic_tools
 from reachy_demo.agent.tools import owner as owner_tools
 from reachy_demo.agent.tools import sound as sound_tools
 from reachy_demo.agent.tools import voice as voice_tools
+from reachy_demo.attention.follow import Follow
+from reachy_demo.attention.mimic import Mimic
 from reachy_demo.audio.player import PlayerError
 from reachy_demo.audio.sound_events import DEFAULT_LOUD_RMS, SoundEvents, with_sound
 from reachy_demo.audio.vad import EnergyVAD
@@ -45,8 +48,12 @@ from reachy_demo.memory.session import MemorySession
 from reachy_demo.memory.store import OWNER, MemoryStore, Speaker
 from reachy_demo.memory.vectors import VectorIndex
 from reachy_demo.ops.tokens import est_tokens
+from reachy_demo.perception.head_pose import DEFAULT_MODEL as MIMIC_MODEL
+from reachy_demo.perception.head_pose import HeadPoseEstimator
+from reachy_demo.perception.objects import DEFAULT_MODEL as OBJECT_MODEL
+from reachy_demo.perception.objects import ObjectDetector, ObjectSource
 from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
-from reachy_demo.robot.adapter import connect_robot
+from reachy_demo.robot.adapter import connect_robot, face_detector
 from reachy_demo.robot.dances import load_dances
 from reachy_demo.robot.motion import Motion
 from reachy_demo.voice.speak_cli import speaker_from_env, uses_gemini
@@ -401,13 +408,40 @@ def run(args: argparse.Namespace) -> int:
             assert sound  # made above for --robot
             sets.append(sound_tools.SoundTools(sound, motion, speaker=mode.speaker))
             prompt += f" {sound_tools.PROMPT}"
+            follow = Follow(motion, robot.read_face, robot.set_face_tracking, sound)
+            objects: tuple[Follow, ObjectSource] | None = None
+            prompt += f" {track.PROMPT}"
             if robot.has_camera:
                 ask, label = vision_asker(vision, keys, base_url)
+                object_model = Path(os.environ.get("OBJECT_MODEL", "").strip() or OBJECT_MODEL)
+                seen = ObjectSource(robot.grab_frame, partial(ObjectDetector, object_model), ask)
+                objects = (
+                    Follow(
+                        motion,
+                        seen.read,
+                        seen.switch,
+                        poll_s=OBJECT_POLL_S,
+                        give_up_s=OBJECT_GIVE_UP_S,
+                        on_lost=lambda: print("  (lost the object, stopped tracking)"),
+                        name="the object",
+                    ),
+                    seen,
+                )
+                prompt += f" {track.OBJECT_PROMPT}"
+                face_model = Path(os.environ.get("MIMIC_MODEL", "").strip() or MIMIC_MODEL)
+                copy = Mimic(
+                    motion,
+                    robot.grab_frame,
+                    lambda: HeadPoseEstimator(face_detector(), face_model),
+                )
+                sets.append(mimic_tools.MimicTools(copy, speaker=mode.speaker))
+                prompt += f" {mimic_tools.PROMPT}"
                 print(f"  (camera on, vision: {label})")
                 sets.append(camera.CameraTools(robot.grab_jpeg, ask))
                 prompt += f" {camera.PROMPT}"
             else:
                 print("  (no camera: the robot can move but not see)")
+            sets.append(track.TrackTools(follow, speaker=mode.speaker, objects=objects))
             agent = make_agent(sets, prompt)
             if agent is None:
                 return 2
@@ -434,6 +468,8 @@ def run(args: argparse.Namespace) -> int:
 
 
 VISION_PROVIDERS = ("hf", "deepseek")
+OBJECT_POLL_S = 0.02  # reading a frame + tracking already takes ~30 ms
+OBJECT_GIVE_UP_S = 10.0  # object unseen this long: stop tracking
 DEFAULT_CONTEXT_TOKENS = 8000
 PUSH_RESERVE_TOKENS = 200  # up to 3 related-memory lines of 240 chars, sent with the user turn
 

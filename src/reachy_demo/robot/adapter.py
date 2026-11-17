@@ -24,6 +24,10 @@ WAKE_S = 2.0  # rest pose -> neutral at startup
 REST_S = 2.0  # neutral -> rest pose at exit
 DAEMON_PORT = 8000  # the daemon's REST API (ReachyMini's default port)
 DOA_TIMEOUT_S = 0.5
+# The daemon's face tracker steers the head itself with this blend weight. 0 pauses its detector,
+# so use the smallest weight that keeps it running: our motion loop stays the head's real owner
+# (its aim pulls the head by 1 %, under a degree).
+TRACKING_WEIGHT = 0.01
 
 
 def doa_reader(host: str) -> Callable[[], tuple[float, bool] | None]:
@@ -44,13 +48,70 @@ def doa_reader(host: str) -> Callable[[], tuple[float, bool] | None]:
     return read
 
 
+def _daemon_json(host: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    """GET (or POST `body`) one daemon REST path; network errors raise OSError."""
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(  # noqa: S310 (fixed http URL)
+        f"http://{host}:{DAEMON_PORT}/api/{path}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="GET" if body is None else "POST",
+    )
+    with urllib.request.urlopen(req, timeout=DOA_TIMEOUT_S) as r:  # noqa: S310
+        return json.loads(r.read())
+
+
+def face_reader(host: str) -> Callable[[], tuple[float, float] | None]:
+    """The face the daemon's detector (YuNet, on the robot) tracks now.
+
+    Returns its centre in the camera frame, x right and y down, each in [-1, 1], or None when no
+    face is seen or detection is off.
+    """
+
+    def read() -> tuple[float, float] | None:
+        face = _daemon_json(host, "media/tracking/face")["face_target"]
+        if not face.get("detected") or face.get("x") is None or face.get("y") is None:
+            return None
+        return float(face["x"]), float(face["y"])
+
+    return read
+
+
+def face_tracking_switch(host: str) -> Callable[[bool], bool]:
+    """Start or stop the daemon's face detector; True when it runs (False: no camera)."""
+
+    def switch(on: bool) -> bool:
+        if on:
+            reply = _daemon_json(host, "media/tracking/enable", {"weight": TRACKING_WEIGHT})
+        else:
+            reply = _daemon_json(host, "media/tracking/disable", {})
+        return bool(reply.get("enabled"))
+
+    return switch
+
+
+def face_detector() -> Callable[[Any], list[tuple[float, float, float, float]]]:
+    """The SDK's YuNet face detector (ONNX, CPU, one thread): BGR frame -> (x, y, w, h) boxes.
+
+    The first call downloads the model (pinned revision) from Hugging Face.
+    """
+    from reachy_mini.vision.face_detector import FaceDetector  # lazy: the `robot` extra
+
+    detector = FaceDetector()
+    return lambda bgr: [f.bbox for f in detector.detect(bgr)]
+
+
 @dataclass(frozen=True)
 class Robot:
     set_pose: SetPose  # send one target, return at once; only robot/motion.py calls it
     grab_jpeg: Callable[[], bytes | None]  # current camera frame; None without a camera
+    grab_frame: Callable[[], Any]  # current BGR frame (numpy HxWx3 uint8); None without a camera
     has_camera: bool
     # (angle rad: 0 = left, pi/2 = front, pi = right; speech) or None. Blocks up to DOA_TIMEOUT_S.
     read_doa: Callable[[], tuple[float, bool] | None]
+    # Face centre (x right, y down, in [-1, 1]) or None. Blocks up to DOA_TIMEOUT_S.
+    read_face: Callable[[], tuple[float, float] | None]
+    set_face_tracking: Callable[[bool], bool]  # daemon face detector on/off
 
 
 def _open(host: str, camera: bool) -> Any:
@@ -103,6 +164,9 @@ def connect_robot(host: str, camera: bool = True) -> Iterator[Robot]:
                 head=head(p), antennas=antennas(p), body_yaw=math.radians(p["body_yaw"])
             )
 
+        def grab_frame() -> Any:
+            return mini.media.get_frame() if has_camera else None
+
         def grab_jpeg() -> bytes | None:
             return mini.media.get_frame_jpeg() if has_camera else None
 
@@ -112,8 +176,18 @@ def connect_robot(host: str, camera: bool = True) -> Iterator[Robot]:
             # present pose (SDK set_target note), so moves must come after it.
             mini.enable_motors()
             mini.goto_target(head=head(NEUTRAL), antennas=antennas(NEUTRAL), duration=WAKE_S)
-            yield Robot(set_pose, grab_jpeg, has_camera, doa_reader(host))
+            yield Robot(
+                set_pose,
+                grab_jpeg,
+                grab_frame,
+                has_camera,
+                doa_reader(host),
+                face_reader(host),
+                face_tracking_switch(host),
+            )
         finally:
+            with contextlib.suppress(OSError):  # a detector left on keeps using robot CPU
+                face_tracking_switch(host)(False)
             try:
                 # Like ReachyMini.goto_sleep(), without its sound (media sound isn't used).
                 mini.goto_target(

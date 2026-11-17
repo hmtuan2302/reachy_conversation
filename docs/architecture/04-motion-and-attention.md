@@ -20,7 +20,7 @@ Priority table **[req]**:
 | 1 | `Command` (`Search`, `LookAt`, `GoToPose`) | owner-only tool | finished / cancelled / timeout |
 | 2 | `Investigate` | `LoudSound` event | camera check done (≤ 6 s) |
 | 3 | `PointFollow` | owner points ≥ 300 ms and says "this/look", or the `look_at_pointed` tool | target reached + 3 s, or the hand disappears |
-| 4 | `Mimic` | owner-only tool `mimic(on)` | `mimic(off)`, owner face lost > 2 s, or 60 s cap |
+| 4 | `Mimic` | owner-only tool `mimic_me(enabled)` | `mimic_me(false)`, spoken stop, or 5 min cap (face lost > 1 s: look back at the user and wait) |
 | 5 | `FaceTrack` | default when faces are present | no face for 3 s |
 | 6 | `Idle` | always (fallback) | never |
 
@@ -36,7 +36,7 @@ Rules **[arch]**:
 |---|---|
 | `Idle` | Slow breathing (z ± 3 mm, 0.2 Hz), a random glance every 6–12 s, antennas relaxed. |
 | `FaceTrack` | Target = the speaking/largest face centre → `look_at_image` pose (computed, not executed: `perform_movement=False`). The target is passed through a 1-euro filter. |
-| `Mimic` | Owner face head yaw/pitch/roll (from the landmarker matrix) mirrored (yaw negated for a mirror effect), scaled 0.8, clamped to ±30° yaw / ±20° pitch / ±15° roll, 1-euro filtered. Lag budget ≤ 300 ms (F6). |
+| `Mimic` | User head yaw/pitch (relative to their line of sight) and roll, from YuNet box + landmarker matrix on a crop; mirrored (yaw negated), scale 1.0 (user request 2026-11-17), plus lean as head x. Clamped to ±35° yaw / ±22° pitch from facing the user (camera view), ±25° roll, ±20 mm x, then the motion safety box. 1-euro filtered, critically damped spring in the motion loop. Lag budget ≤ 300 ms (F6). Built in `attention/mimic.py`, see [usage/mimic.md](../usage/mimic.md). |
 | `PointFollow` | Target = pointed point (see [03](03-perception.md) §2) in the capture pose. |
 | `Investigate` (deferred; F7 is on request for now, see [02 §6](02-voice-and-audio.md#6-sound-events-f7)) | Turn toward the DoA yaw (head first, then body yaw if > 45°), wait 500 ms, grab a frame → `describe()` → inject the event into the conversation. Low confidence → a 3-pose sweep. |
 | `Search` | Drives the scan in [03](03-perception.md) §5. Reports progress to the tool via a future. |

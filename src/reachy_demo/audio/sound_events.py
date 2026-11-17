@@ -75,12 +75,15 @@ def circular_mean(yaws: list[float]) -> float:
     return math.degrees(math.atan2(sum(map(math.sin, r)), sum(map(math.cos, r))))
 
 
-def plan_turn(target: float, body_now: float) -> tuple[float, float] | None:
+def plan_turn(
+    target: float, body_now: float, head_max: float = LIMITS["yaw"]
+) -> tuple[float, float] | None:
     """(body_yaw, head_yaw) facing `target` inside the motion limits, or None if out of reach.
 
-    The body stays put if the head alone can reach; otherwise it turns just enough.
+    The body stays put if the head alone can reach (`head_max` from the body); otherwise it turns
+    just enough.
     """
-    body_max, head_max = LIMITS["body_yaw"], LIMITS["yaw"]
+    body_max = LIMITS["body_yaw"]
     target = wrap(target)
     body = min(max(body_now, -body_max), body_max)
     if abs(target - body) > head_max:

@@ -45,7 +45,7 @@ LIMITS: Pose = {
 }
 EASE_S = 0.5  # easing into and out of a dance, and back to neutral after a stop
 MAX_LONG_S = 15.0  # longest dance, repeats included
-BUSY_LONG = "busy: dancing, say stop first"
+BUSY_LONG = "busy: dancing or following the user, say stop first"
 BUSY_FULL = "busy: too many moves queued"
 Offset = Callable[[float], Pose]  # seconds since the dance started -> offset from neutral
 
@@ -53,7 +53,8 @@ Offset = Callable[[float], Pose]  # seconds since the dance started -> offset fr
 @dataclass(frozen=True)
 class Move:
     name: str
-    long: bool  # long moves (dances) block every other move until they end or are stopped
+    # long moves (dances, face tracking) block every other move until they end or are stopped
+    long: bool
     duration_s: float
     pose_at: Callable[[float, Pose], Pose]  # (seconds since start, start pose) -> pose
     end: Pose  # where the move leaves the head
