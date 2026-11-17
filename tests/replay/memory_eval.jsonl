@@ -1,0 +1,34 @@
+{"t": "2026-11-01T20:00:00+07:00", "say": "Hi, my name is Tuấn."}
+{"t": "2026-11-01T20:01:00+07:00", "say": "I have a younger sister named Mai, she is 20."}
+{"t": "2026-11-01T20:02:00+07:00", "say": "Tôi có con chó tên là Bin, nó là giống corgi."}
+{"t": "2026-11-01T20:03:00+07:00", "say": "I live in Saigon, in District 3."}
+{"t": "2026-11-01T20:04:00+07:00", "say": "My favourite drink is iced coffee with milk."}
+{"t": "2026-11-01T20:05:00+07:00", "say": "Mai has a dog too, called Lu, and it only eats chicken."}
+{"t": "2026-11-01T20:06:00+07:00", "ask": "What's my dog's name?", "expect": ["Bin"], "category": "single"}
+{"t": "2026-11-01T20:07:00+07:00", "ask": "How old is my sister?", "expect": ["20"], "category": "single"}
+{"t": "2026-11-01T20:08:00+07:00", "ask": "What breed is my dog?", "expect": ["corgi"], "category": "mixed_lang"}
+{"restart": true}
+{"t": "2026-11-03T09:00:00+07:00", "say": "Thứ sáu này tôi có bài thi toán, hơi lo."}
+{"t": "2026-11-03T09:01:00+07:00", "say": "I'm planning a trip to Da Lat with Mai in December."}
+{"t": "2026-11-03T09:02:00+07:00", "ask": "Where do I live?", "expect": ["Saigon", "Sài Gòn", "Ho Chi Minh", "Hồ Chí Minh"], "category": "cross"}
+{"t": "2026-11-03T09:03:00+07:00", "ask": "What's my favourite drink?", "expect": ["coffee", "cà phê"], "category": "cross"}
+{"restart": true}
+{"t": "2026-11-09T19:00:00+07:00", "say": "I moved to Hanoi last week for a new job."}
+{"t": "2026-11-09T19:01:00+07:00", "ask": "Where do I live now?", "expect": ["Hanoi", "Hà Nội", "Ha Noi"], "category": "update"}
+{"t": "2026-11-09T19:02:00+07:00", "ask": "Bài thi toán của tôi là ngày nào?", "expect": ["friday", "thứ sáu", "thứ 6", "6/11", "november 6", "6 tháng 11", "ngày 6", "06"], "category": "cross"}
+{"t": "2026-11-09T19:03:00+07:00", "ask": "What does my sister's dog eat?", "expect": ["chicken", "gà"], "category": "multihop"}
+{"t": "2026-11-09T19:04:00+07:00", "ask": "Em gái tôi tên là gì?", "expect": ["Mai"], "category": "mixed_lang"}
+{"t": "2026-11-09T19:05:00+07:00", "ask": "Tôi thích uống gì?", "expect": ["coffee", "cà phê"], "category": "mixed_lang"}
+{"t": "2026-11-09T19:06:00+07:00", "ask": "Do I have any pets?", "expect": ["Bin"], "category": "cross"}
+{"t": "2026-11-09T19:07:00+07:00", "ask": "What's my mother's name?", "expect_none": true, "category": "abstain"}
+{"t": "2026-11-09T19:08:00+07:00", "ask": "What car do I drive?", "expect_none": true, "category": "abstain"}
+{"t": "2026-11-09T19:09:00+07:00", "ask": "Tôi sinh năm bao nhiêu?", "expect_none": true, "category": "abstain"}
+{"restart": true}
+{"t": "2026-11-10T20:00:00+07:00", "ask": "What did we talk about last Tuesday?", "expect": ["exam", "thi", "Da Lat", "Đà Lạt"], "category": "temporal"}
+{"t": "2026-11-10T20:01:00+07:00", "ask": "Hôm qua mình nói chuyện gì?", "expect": ["Hanoi", "Hà Nội", "Ha Noi", "chuyển", "moved", "job", "việc"], "category": "temporal"}
+{"t": "2026-11-10T20:02:00+07:00", "ask": "Did I use to live somewhere else?", "expect": ["Saigon", "Sài Gòn", "Ho Chi Minh", "Hồ Chí Minh"], "category": "update"}
+{"t": "2026-11-10T20:03:00+07:00", "ask": "Who am I going to Da Lat with?", "expect": ["Mai"], "category": "cross"}
+{"t": "2026-11-10T20:04:00+07:00", "ask": "What is the name of my sister's dog?", "expect": ["Lu"], "category": "multihop"}
+{"t": "2026-11-10T20:05:00+07:00", "ask": "Mình định đi đâu vào tháng 12?", "expect": ["Da Lat", "Đà Lạt"], "category": "mixed_lang"}
+{"t": "2026-11-10T20:06:00+07:00", "ask": "What breed is Bin?", "expect": ["corgi"], "category": "cross"}
+{"t": "2026-11-10T20:07:00+07:00", "ask": "What is Mai's boyfriend's name?", "expect_none": true, "category": "abstain"}

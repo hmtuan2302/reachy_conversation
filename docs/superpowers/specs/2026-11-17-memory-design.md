@@ -2,7 +2,7 @@
 
 Date: 2026-11-17 · Feature F8 (milestone M7), extended · Research: [docs/research/2026-11-17-robot-memory-research.md](../../research/2026-11-17-robot-memory-research.md) (cited as "research §n")
 
-Status: **draft for owner review.** Calls marked **[my call]** are proposals the owner has not confirmed. **[verify]** = check before relying on it.
+Status: **Phase 1 built 2026-11-17** (branch `feat/memory-phase1`; as-built notes in §7.11). Phases 2–4 are design only. Calls marked **[my call]** are proposals the owner has not confirmed. **[verify]** = check before relying on it.
 
 ---
 
@@ -60,13 +60,16 @@ src/reachy_demo/memory/
   timeparse.py    "yesterday", "hôm qua", "last Tuesday", "sáng nay" → (start, end). Pure.
   briefing.py     build_briefing(store, speaker, now) → str (~600 tokens), once per session. Pure over the store.
   consolidate.py  Consolidator: extract → retrieve similar → decide → apply. Uses an injected chat fn.
-  writer.py       MemoryWriter: bounded async queue + worker task; feeds the consolidator.
-  episodes.py     Session tracker + episode summarizer (P1), task episodes (P2).
+  session.py      MemorySession: session boundaries, cached briefing, turn log, bounded job queue +
+                  background worker, crash recovery, preload of last turns, close/backup.
+  episodes.py     summarize_session (P1), task episodes (P2).
+  prompts.py      Extract / decide / summarize prompts + ask_json (JSON-only call, one retry).
   spatial.py      Bearing math, landmarks, freshness policy (P2).
   jobs.py         Cold-path jobs: compress, dedupe, retention, reflections, routines (P3/P4).
   scheduler.py    Reminders and proactive triggers (P4).
 src/reachy_demo/agent/tools/memory.py   MemoryTools (ToolSet): remember, recall, forget (+ later tools)
-src/reachy_demo/memory/cli.py           `reachy-demo memory list|show|forget|export|eval` (P1 eval, P3 rest)
+src/reachy_demo/agent/memory_eval.py    `reachy-demo memory eval` (P1). It wires the real agent, so it lives in agent/.
+                                        `memory list|show|forget|export` come in P3.
 ```
 
 Dependency direction: `agent` → `memory`; `memory` never imports `agent`, `robot`, `voice` or `perception`. Chat functions, clock and the robot pose are injected (constructor arguments), so every component tests with fakes.
@@ -94,9 +97,9 @@ Rules:
 
 ### 5.3 Agent integration (the only change to `agent/`)
 
-- `Agent.__init__` gains `context: Callable[[], str] | None = None`. The system message is `system_prompt + "\n\n" + context()`; the CLI's `context` returns the briefing cached for the current session (rebuilt by the `SessionTracker` at session start, §7.3), so calling it each round costs nothing.
-- `Agent` gains `preload(turns)` to seed its history with the last raw turns at startup (§7.3 block 5).
-- `Agent` gains `on_turn: Callable[[list[dict]], None] | None = None`, called with the finished turn (user, assistant, tool messages) where `self._turns` is updated today. The CLI passes `writer.submit`.
+- `Agent.__init__` gains `context: Callable[[], str] | None = None`. The system message is `system_prompt + "\n\n" + context()`; the CLI's `context` returns the briefing cached for the current session (rebuilt by `MemorySession` at session start, §7.3), so calling it each round costs nothing.
+- `Agent` gains `preload(messages)` to seed its history with the last raw turns at startup; the CLI passes `MemorySession.preload()` (§7.3 block 5).
+- `Agent` gains `on_turn: Callable[[list[dict]], None] | None = None`, called with the finished turn (user, assistant, tool messages) where `self._turns` is updated today. The CLI passes `MemorySession.submit`.
 - `MemoryTools` is registered in **both** robot and no-robot modes (it needs no robot). In no-robot mode the CLI builds a `Toolbox(MemoryTools(...))` and passes tool specs to the LLM, as robot mode does now.
 - New env vars (in `.env.example` and the usage doc): `MEMORY_DB` (default `data/memory.db`), `MEMORY=off` to disable memory entirely (demo escape hatch), `MEMORY_MODEL` (default `deepseek-chat`, used by warm/cold LLM calls; non-reasoning for speed, same reason as the stop check).
 
@@ -105,7 +108,7 @@ Rules:
 ```python
 @dataclass(frozen=True)
 class Speaker:
-    person_id: int          # people.id; OWNER_ID = 1 is created on first start
+    person_id: int  # people.id; OWNER_ID = 1 is created on first start
     role: Literal["owner", "guest"]
 ```
 P1: always the owner. M8: the gate sets it per turn; an unknown voice gets a session-only guest row. Read scope: owner sees everything; a guest sees only facts with `subject_person_id` = the guest and `shared = 1` facts (e.g. the robot's own persona facts). Writes: owner only; guest turns go to `event_log` but are never consolidated into owner facts.
@@ -120,13 +123,13 @@ P1: always the owner. M8: the gate sets it per turn; an unknown voice gets a ses
 -- P1 ------------------------------------------------------------------------
 meta(key TEXT PRIMARY KEY, value TEXT)
 people(id INTEGER PRIMARY KEY, role TEXT CHECK(role IN ('owner','guest')) NOT NULL,
-       name TEXT, aliases_json TEXT DEFAULT '[]', language TEXT,           -- 'vi' | 'en'
+       name TEXT, aliases_json TEXT DEFAULT '[]',                          -- current + earlier names
        consent_recognize INTEGER DEFAULT 0, created REAL, last_seen REAL,
        retention_until REAL)                                               -- NULL = keep
 facts(id INTEGER PRIMARY KEY, subject_person_id INTEGER REFERENCES people(id),
       subject_text TEXT NOT NULL,            -- "Tuan", "Tuan's sister Mai", "Reachy"
       text TEXT NOT NULL,                    -- one atomic sentence, English, third person
-      text_original TEXT,                    -- as said, any language (for read-back)
+      text_original TEXT NOT NULL DEFAULT '', -- as said, any language (for read-back)
       category TEXT CHECK(category IN ('bio','preference','relation','plan','setting','other')),
       source TEXT CHECK(source IN ('said','seen','inferred')) NOT NULL,
       confidence REAL DEFAULT 1.0, importance REAL DEFAULT 0.5,   -- 0..1
@@ -139,16 +142,16 @@ facts(id INTEGER PRIMARY KEY, subject_person_id INTEGER REFERENCES people(id),
 CREATE VIRTUAL TABLE facts_fts USING fts5(text, subject_text, text_original,
       content='facts', content_rowid='id', tokenize='unicode61 remove_diacritics 2')
       -- + the three standard triggers keeping facts_fts in sync
-episodes(id INTEGER PRIMARY KEY,
+episodes(id INTEGER PRIMARY KEY, session_id TEXT,  -- UNIQUE when set: one episode per session
          kind TEXT CHECK(kind IN ('conversation','task','visual','moment')) NOT NULL,
          start REAL NOT NULL, end REAL NOT NULL, person_ids_json TEXT DEFAULT '[]',
          summary TEXT NOT NULL, topics_json TEXT DEFAULT '[]', importance REAL DEFAULT 0.5,
          outcome TEXT CHECK(outcome IN ('success','failure','partial')),   -- task only
          details_json TEXT,                                                -- task: goal, steps, reason
          compressed_level INTEGER DEFAULT 0, source_event_max INTEGER)    -- last event_log id covered
-CREATE VIRTUAL TABLE episodes_fts USING fts5(summary, topics, content='episodes', ...)
+CREATE VIRTUAL TABLE episodes_fts USING fts5(summary, topics_json, content='episodes', ...)
 follow_ups(id INTEGER PRIMARY KEY, person_id INTEGER REFERENCES people(id), text TEXT NOT NULL,
-           due REAL, episode_id INTEGER REFERENCES episodes(id), done REAL)
+           due REAL, created REAL NOT NULL, episode_id INTEGER REFERENCES episodes(id), done REAL)
 event_log(id INTEGER PRIMARY KEY, t REAL NOT NULL, kind TEXT NOT NULL,   -- 'turn' | 'tool' | 'sighting' | 'system'
           person_id INTEGER, session_id TEXT, payload_json TEXT NOT NULL, consolidated INTEGER DEFAULT 0)
 -- indexes: facts(subject_person_id, expired), facts(expired, importance), episodes(start),
@@ -200,13 +203,13 @@ Why these choices:
 |---|---|---|
 | 1.1 | Store + schema P1 | `MemoryStore(path, clock)`; creates the owner row (`id=1`, name NULL) on first start. Backup copy on clean shutdown (`memory.db.bak`). |
 | 1.2 | Event log + writer queue | Every finished turn → `event_log(kind='turn')` (user text, answer, tool names), then queued for consolidation. |
-| 1.3 | Importance gate | Rules first, no LLM: skip turns with < 3 words, pure greetings/thanks, stop commands, tool-only actions ("turn left"). Keep anything with a name, number, date/time word, "I/my/me/tôi/của tôi", "remember/nhớ", likes/dislikes. Borderline = keep (the extractor can return nothing). |
+| 1.3 | Importance gate | Rules first, no LLM (`worth_keeping`): keep anything with "remember/nhớ/my name/tên tôi là"; skip turns under 3 words and turns made only of small-talk or robot-command words ("hi", "cảm ơn nhé", "turn left", "look up again"). Everything else is kept (the extractor can return nothing). |
 | 1.4 | Consolidator | §7.4. One extract call, one decide call (merged into one when there are no similar facts). |
 | 1.5 | `recall` tool | §7.5. FTS5 + filters + scoring + abstention. |
 | 1.6 | `remember` / `forget` tools | Explicit memory. `remember` goes through the same consolidator synchronously (with a 3 s timeout) so it dedupes; `forget` §7.6. |
 | 1.7 | Briefing | §7.3: once per session, SQL only; ≥ 5 last conversations; last raw turns reloaded after a short gap. |
 | 1.8 | Episodes + follow-ups | §7.7. Session ends after 10 min without a turn, or at exit; summarized then. |
-| 1.9 | Eval harness | `reachy-demo memory eval` runs the scripted set (§10) against the real LLM; also runs the **long-context baseline** (approach A). |
+| 1.9 | Eval harness | `reachy-demo memory eval` runs the scripted set (§12) against the real LLM; also runs the **long-context baseline** (approach A). |
 
 ### 7.3 Briefing (built once per session)
 
@@ -230,8 +233,9 @@ Later phases add: **P3** ≤ 2 reflection hints (tone only, hedged); **P4** remi
 
 Example:
 ```
-[memory] Now: Mon 17 Nov 2026 19:05. You are talking to Tuan (owner); last talked 2 days ago.
-Prefers Vietnamese, short answers.
+[memory] Now: Mon 17 Nov 2026 19:05. You are talking to Tuan (owner; earlier name: Ha); last talked 2 days ago.
+Preferences:
+- Tuan wants answers in Vietnamese. (said, 2 weeks ago)
 Follow-up: ask how the exam on Fri 14 Nov went.
 Recent conversations:
 - Sat 20:10: exam stress, trip plan to Da Lat.
@@ -257,7 +261,7 @@ Input: one turn (user text, answer, speaker, event id). Steps:
    Rules in the prompt: atomic, third person, English, resolve "I/tôi" to the speaker's name, absolute dates, skip small talk, return `{"facts": []}` when nothing is worth keeping, mark health/finance/passwords/addresses `sensitive`. `name` is set when the speaker states their name.
 2. **Retrieve similar**: for each candidate, FTS5 `MATCH` on its key words (stopwords removed) over non-expired facts with the same `subject_person_id`, top 5 by BM25.
 3. **Decide** (LLM, JSON): given the candidate and the ≤ 5 retrieved facts with ids, return one of `ADD`, `UPDATE {id, text}` (same fact, better wording or new detail), `INVALIDATE {id, valid_to}` (contradicted: old fact expires, candidate is added, `replaced_by` set), `NOOP` (already known). **Any id not in the retrieved set is rejected** (falls back to ADD). Skipped when 0 similar facts (→ ADD).
-4. **Policy in code** before applying: guest speaker → nothing written; `sensitive` → written only if the turn was an explicit `remember` call, stored `sensitive=1` (never in the briefing, read back only on direct request); `name` → `people.name` for the speaker.
+4. **Policy in code** before applying: guest speaker → nothing written; `sensitive` → written only if the turn was an explicit `remember` call, stored `sensitive=1` (never in the briefing, read back only on direct request); `name` → `people.name` for the speaker (the replaced name goes to `aliases_json`); a fact about the speaker's own name is dropped, and any old one is closed.
 5. **Apply** in one transaction; set `evidence_json`, mark `event_log.consolidated=1`.
 
 Failure handling: invalid JSON → one retry with the error message, then drop and log `memory_extract_failed`. LLM timeout 10 s. The worker catches everything; a crash restarts the worker (supervisor rule) and the turn is retried once at next startup via `consolidated=0`.
@@ -302,9 +306,10 @@ Algorithm:
 
 ### 7.7 Episodes and follow-ups
 
-- `SessionTracker` (in the writer): a session starts at the first turn (and triggers the briefing rebuild, §7.3); it ends after **10 min** with no turn, or at app exit, or at startup when the last session in `event_log` has no episode (crash recovery).
-- On end: one LLM call over the session's turns (capped at the last 40 turns / 6k tokens) → `{"summary": "...", "topics": [...], "importance": 0.0–1.0, "follow_ups": [...]}` → `episodes(kind='conversation')`, `source_event_max` = last event id (idempotent: re-running skips covered events).
-- Follow-ups from both the consolidator and the summary go to `follow_ups`; the briefing shows due ones; the model marks one done via `remember` ("Tuan said the exam went well") → consolidator sets `done` when the fact matches the follow-up **[my call: match by FTS on the follow-up text; simple, may miss]**.
+- `MemorySession`: a session starts at the first turn (and rebuilds the briefing, §7.3); it ends after **10 min** with no turn (checked at the next turn and every 30 s by the worker), or at app exit. At construction, before any turn, sessions in `event_log` without an episode and unconsolidated turns of the last 24 h are queued (crash recovery).
+- A session where no turn passes the importance gate gets an episode "Only small talk." with importance 0, without an LLM call; the briefing skips importance-0 episodes, and recovery doesn't retry it.
+- On end: one LLM call over the session's turns (capped at the last 40 turns / 6k tokens) → `{"summary": "...", "topics": [...], "importance": 0.0–1.0, "follow_ups": [...]}` → `episodes(kind='conversation', session_id)`; the unique `session_id` makes it idempotent.
+- Follow-ups from both the consolidator and the summary go to `follow_ups`; the briefing shows due ones; the model marks one done via `remember` ("Tuan said the exam went well") → consolidator sets `done` when the fact matches the follow-up **[my call: word overlap between the follow-up and the new fact, ≥ 2 shared content words (or all of them if fewer); simple, may miss]**.
 - At exit the summary runs with a 5 s timeout; if it fails, the startup recovery does it next time.
 
 ### 7.8 Prompt rules (added to `SYSTEM_PROMPT`)
@@ -319,7 +324,7 @@ Algorithm:
 4. `recall` scoring + abstention + time filters — tests with a seeded DB.
 5. `briefing.py` — tests: ~600-token cap with trim order (facts first, ≥ 5 kept; episodes never cut), 5 last conversations, raw turns only when the gap is < 2 h, no sensitive facts, no-name line, rebuilt only at session start.
 6. `consolidate.py` with a fake chat fn returning canned JSON — tests for each decision, invalid id rejected, invalid JSON retry, guest no-write, sensitive policy.
-7. `writer.py` queue + `SessionTracker` with a fake clock — tests: drop-oldest, 10-min boundary, crash recovery.
+7. `session.py` queue + session boundaries with a fake clock — tests: drop-oldest, 10-min boundary, crash recovery.
 8. `MemoryTools` — tests: owner-only, forget flows, confirmation for everything.
 9. Agent hooks (`context`, `on_turn`) — extend `test_agent.py`; CLI wiring, `MEMORY=off`.
 10. `memory eval` harness + test set; run baseline A, then B. **Gate**: if B misses the targets on paraphrase or VN/EN categories, plan approach C (ask before adding `sqlite-vec` + embedding model).
@@ -327,11 +332,20 @@ Algorithm:
 
 ### 7.10 Acceptance
 - After restart, the robot uses the owner's name and a fact told in the previous session.
-- Eval (§10) P1 categories meet their targets; abstention 100%.
+- Eval (§12) P1 categories meet their targets; abstention 100%.
 - Added turn latency ≤ 150 ms p95 (briefing build measured in-process); warm path ≤ 2 LLM calls per kept turn.
 - `MEMORY=off` runs the agent exactly as before.
 - ruff, mypy strict, pytest green.
 
+
+### 7.11 As built (2026-11-17)
+- **Single source of truth (schema v2).** Identity (name, earlier names) lives only in `people`; everything else, including language, is a fact (`category='setting'`). `people.language` was dropped. Migration v2 moves an existing language into a setting fact and turns old "the owner's name is X" facts into `people.name` / `aliases` and closes them. Reason: the name is a key (recall's person filter, M8 voice ID), so it needs a structured column; free-text facts can't be a reliable key.
+- All of §7.2 is built and green (ruff, mypy strict, 287 unit tests). No new dependencies.
+- **Eval gate (step 10):** approach B passed, so no vectors for now. `memory eval`, `deepseek-chat`, one run, 22 questions: memory **22/22**; long-context baseline 20/22 (fails both temporal questions). The set has 22 questions, not the planned 40. Grow it before trusting small differences.
+- **Latency:** the briefing is built once per session from SQL in under 1 ms (eval p95 0.5 ms). That is far inside the 150 ms budget. The p95 added turn latency on the real robot isn't measured yet **[verify]**.
+- **Background cost:** 1.7 memory LLM calls per turn in the eval (extract, plus decide when similar facts exist; summaries per session).
+- `forget` also deletes the logged turns a fact came from (`evidence_json`). Episode summaries that mention a forgotten fact stay until "forget everything" (limit, P3).
+- Not built in P1, as designed: identity (M8), the `memory list/show/export` CLI (P3), the LLM judge in the eval (keyword scoring, marked as a shortcut).
 ---
 
 ## 8. Phase 2 — Objects and places
@@ -446,3 +460,11 @@ Local-only DB; cloud calls send only the turn or session text needed for extract
 2. **Cloud extraction**: OK to send turn text to DeepSeek for memory extraction and summaries?
 3. **Target setting**: home companion, demo booth, or both (changes guest retention and proactivity defaults)?
 4. **Idle-glance captions** (3.6): wanted at all, and how often?
+
+export MEMORY_DB=data/memory-test.db
+alias run='uv run reachy-demo agent --type --no-speak'
+alias facts='sqlite3 -header -column $MEMORY_DB "select id, text, category, sensitive, expired is not null as old from facts"'
+unalias facts eps fus 2>/dev/null
+facts() { sqlite3 -header -column "$MEMORY_DB" "select id, text, category, sensitive, expired is not null as old from facts"; }
+eps()   { sqlite3 -header -column "$MEMORY_DB" "select session_id, datetime(start, 'unixepoch', 'localtime') as start, importance, summary from episodes"; }
+fus()   { sqlite3 -header -column "$MEMORY_DB" "select id, text, datetime(due, 'unixepoch', 'localtime') as due, done is not null as done from follow_ups"; }

@@ -11,7 +11,7 @@ bot: Hello! How can I help you today?
 
 Add `--no-speak` for text answers only.
 
-It remembers the conversation (the last 10 questions and answers), so follow-ups work:
+It remembers the conversation (the last 10 questions and answers), so follow-ups work. It also remembers you **across runs**: see [memory.md](memory.md).
 
 ```
 you: Thủ đô của Việt Nam là gì?
@@ -35,6 +35,7 @@ GEMINI_API_KEY=...           # text → speech (not needed with --no-speak); ais
 # TTS_VOICE=Kore             # optional Gemini voice (e.g. Kore, Puck)
 # TTS_MODEL=gemini-3.8-flash-tts
 # TTS_PLAYER=none            # optional: save WAVs only, don't play. Default plays through Windows ffplay.exe
+# MEMORY=off                 # optional: no long-term memory (see memory.md)
 ```
 
 Playback uses **Windows `ffplay.exe`**, which comes with `winget install Gyan.FFmpeg.Essentials` (see [transcribe.md](transcribe.md)). It plays on the Windows default output, e.g. your headset.
@@ -275,7 +276,7 @@ If it plays back as silence, the mic route isn't delivering sound (see the mic s
 
 - Speech starts after the whole text answer is ready (answers are short, so this adds under 1 s). There's no interrupting the bot while it speaks.
 - **Echo:** with laptop speakers the mic can hear the bot and treat it as a new question. Use headphones.
-- The only tools are the head tools (with `--robot`). It can't remember things between runs: conversation memory lasts only while the command runs.
+- Tools: the memory tools `recall`, `remember` and `forget` always ([memory.md](memory.md)), plus the head and camera tools with `--robot`.
 - Piping audio **faster than real time** (e.g. `ffmpeg` without `-re`) can join separate sentences into one turn. A live mic and `--file` are paced in real time.
 - Your audio goes to Pollen's Hugging Face server, your questions go to DeepSeek, and the answers go to Google Gemini for speech.
-- Code: [src/reachy_demo/agent/](../../src/reachy_demo/agent/) (`llm.py` DeepSeek client, `agent.py` history, prompt and tool loop, `cli.py` pipeline, `tools/head.py` head tools), [src/reachy_demo/robot/adapter.py](../../src/reachy_demo/robot/adapter.py), [src/reachy_demo/voice/tts.py](../../src/reachy_demo/voice/tts.py), [src/reachy_demo/audio/player.py](../../src/reachy_demo/audio/player.py).
+- Code: [src/reachy_demo/agent/](../../src/reachy_demo/agent/) (`llm.py` DeepSeek client, `agent.py` history, prompt and tool loop, `cli.py` pipeline, `tools/head.py` head tools, `tools/memory.py` memory tools), [src/reachy_demo/robot/adapter.py](../../src/reachy_demo/robot/adapter.py), [src/reachy_demo/voice/tts.py](../../src/reachy_demo/voice/tts.py), [src/reachy_demo/audio/player.py](../../src/reachy_demo/audio/player.py).

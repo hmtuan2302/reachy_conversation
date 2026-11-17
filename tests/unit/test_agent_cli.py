@@ -13,6 +13,12 @@ from reachy_demo.agent.llm import LLMError
 from reachy_demo.voice.tts import TTSError
 
 
+@pytest.fixture(autouse=True)
+def _memory_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never touch the real data/memory.db; the memory tests below opt in with a temp DB."""
+    monkeypatch.setenv("MEMORY", "off")
+
+
 async def _turns(*texts: str) -> AsyncIterator[str]:
     for t in texts:
         yield t
@@ -374,3 +380,52 @@ def test_type_robot_with_deepseek_vision_needs_no_hf_token(
     assert cli.run(args) == 2
     err = capsys.readouterr().err
     assert "ROBOT_HOST" in err and "HF_TOKEN" not in err
+
+
+def test_memory_on_persists_facts_across_runs(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Any
+) -> None:
+    import json
+
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.setenv("MEMORY", "on")
+    monkeypatch.setenv("MEMORY_DB", str(tmp_path / "m.db"))
+    seen: list[tuple[list[dict[str, Any]], Any]] = []
+
+    async def fake_chat(messages: list[dict[str, Any]], **kw: Any) -> AsyncIterator[str]:
+        seen.append((messages, kw.get("tools")))
+        yield "Nice!"
+
+    async def fake_memory_llm(messages: list[dict[str, str]], **kw: Any) -> AsyncIterator[str]:
+        if messages[0]["content"].startswith("Summarize"):
+            yield json.dumps({"summary": "Talked about Mai.", "topics": [], "importance": 0.5})
+        else:
+            yield json.dumps(
+                {
+                    "facts": [{"subject": "Tuan", "text": "Tuan has a sister named Mai."}],
+                    "follow_ups": [],
+                    "name": "Tuan",
+                    "language": None,
+                }
+            )
+
+    monkeypatch.setattr(cli, "chat_events", fake_chat)
+    monkeypatch.setattr(cli, "chat_stream", fake_memory_llm)
+    args = _args()
+    args.type = True
+    monkeypatch.setattr("sys.stdin", io.StringIO("I have a sister named Mai\n"))
+    assert cli.run(args) == 0
+    names = [t["function"]["name"] for t in seen[0][1]]
+    assert names == ["recall", "remember", "forget"]  # memory tools without --robot
+    assert "[memory]" in seen[0][0][0]["content"] and "long-term memory" in seen[0][0][0]["content"]
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("who is my sister?\n"))
+    assert cli.run(args) == 0
+    system = seen[1][0][0]["content"]
+    assert "You are talking to Tuan" in system and "Tuan has a sister named Mai." in system
+    assert "Talked about Mai." in system  # last session summarized at exit
+    assert seen[1][0][1] == {"role": "user", "content": "I have a sister named Mai"}  # preloaded
+    assert (tmp_path / "m.db.bak").exists()
+    assert "(memory on:" in capsys.readouterr().out

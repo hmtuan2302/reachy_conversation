@@ -11,6 +11,7 @@ import contextlib
 import os
 import sys
 import threading
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from functools import partial
 from typing import TextIO
@@ -27,8 +28,12 @@ from reachy_demo.agent.llm import (
     chat_stream,
 )
 from reachy_demo.agent.tools import Toolbox, ToolSet, camera, head
+from reachy_demo.agent.tools import memory as memory_tools
 from reachy_demo.audio.player import PlayerError
 from reachy_demo.audio.vad import EnergyVAD
+from reachy_demo.memory.consolidate import Consolidator
+from reachy_demo.memory.session import MemorySession
+from reachy_demo.memory.store import OWNER, MemoryStore
 from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
 from reachy_demo.robot.adapter import connect_robot
 from reachy_demo.robot.dances import load_dances
@@ -257,6 +262,27 @@ def run(args: argparse.Namespace) -> int:
             base_url=base_url,
         ),
     )
+    memory = memory_from_env(keys["DEEPSEEK_API_KEY"], base_url)
+    sets: list[ToolSet] = []
+    prompt = SYSTEM_PROMPT
+    if memory:
+        session, tools_ = memory
+        sets.append(tools_)
+        prompt += f" {memory_tools.PROMPT}"
+
+    def make_agent(sets: list[ToolSet], prompt: str) -> Agent:
+        tools = Toolbox(*sets) if sets else None
+        agent = Agent(
+            partial(llm, model=model, tools=tools.specs()) if tools else partial(llm, model=model),
+            system_prompt=prompt,
+            tools=tools,
+            context=memory[0].context if memory else None,
+            on_turn=memory[0].submit if memory else None,
+        )
+        if memory:
+            agent.preload(memory[0].preload())
+        return agent
+
     with contextlib.ExitStack() as stack:
         if args.robot:
             try:
@@ -266,8 +292,8 @@ def run(args: argparse.Namespace) -> int:
                 return 1
             motion = Motion(robot.set_pose, on_error=lambda e: print(f"  (head error: {e})"))
             head_tools = head.HeadTools(motion, load_dances())
-            prompt = f"{SYSTEM_PROMPT} {head.PROMPT}"
-            sets: list[ToolSet] = [head_tools]
+            prompt += f" {head.PROMPT}"
+            sets.append(head_tools)
             if robot.has_camera:
                 ask, label = vision_asker(vision, keys, base_url)
                 print(f"  (camera on, vision: {label})")
@@ -275,10 +301,7 @@ def run(args: argparse.Namespace) -> int:
                 prompt += f" {camera.PROMPT}"
             else:
                 print("  (no camera: the robot can move but not see)")
-            tools = Toolbox(*sets)
-            agent = Agent(
-                partial(llm, model=model, tools=tools.specs()), system_prompt=prompt, tools=tools
-            )
+            agent = make_agent(sets, prompt)
             main = converse(
                 turns,
                 agent,
@@ -288,15 +311,54 @@ def run(args: argparse.Namespace) -> int:
                 on_stop=head_tools.stop,
                 moving=lambda: head_tools.busy,
             )
-            code = run_until_done(_then_close(main, head_tools))
+            code = run_until_done(_with_memory(_then_close(main, head_tools), memory))
         else:
-            agent = Agent(partial(llm, model=model))
-            code = run_until_done(converse(turns, agent, sys.stdout, speak, stop))
+            agent = make_agent(sets, prompt)
+            main = converse(turns, agent, sys.stdout, speak, stop)
+            code = run_until_done(_with_memory(main, memory))
     save_recording(args, rec)
     return code
 
 
 VISION_PROVIDERS = ("hf", "deepseek")
+
+
+def memory_from_env(
+    api_key: str, base_url: str
+) -> tuple[MemorySession, memory_tools.MemoryTools] | None:
+    """Memory (MEMORY_DB, MEMORY_MODEL), or None when MEMORY=off or the DB can't be opened."""
+    if os.environ.get("MEMORY", "").strip().lower() in ("off", "0", "false", "no"):
+        return None
+    path = os.environ.get("MEMORY_DB", "").strip() or "data/memory.db"
+    try:
+        store = MemoryStore(path, time.time)
+    except Exception as e:  # fail small: a broken DB turns memory off, not the agent
+        print(f"  (memory off: cannot open {path}: {e})", file=sys.stderr)
+        return None
+    # Non-reasoning model by default: memory calls run in the background but must stay cheap.
+    chat = partial(
+        chat_stream,
+        api_key=api_key,
+        model=os.environ.get("MEMORY_MODEL", "").strip() or DEFAULT_MODEL,
+        base_url=base_url,
+    )
+    consolidator = Consolidator(store, chat, time.time)
+    session = MemorySession(store, consolidator, chat, clock=time.time)
+    print(f"  (memory on: {path})")
+    return session, memory_tools.MemoryTools(store, consolidator, speaker=lambda: OWNER)
+
+
+async def _with_memory(main: Awaitable[None], memory: tuple[MemorySession, object] | None) -> None:
+    """Run the memory worker beside `main`; on exit, summarize the session and back up."""
+    if memory is None:
+        await main
+        return
+    session = memory[0]
+    worker = asyncio.create_task(session.run())
+    try:
+        await main
+    finally:
+        await session.close(worker)
 
 
 def vision_asker(provider: str, keys: dict[str, str], llm_base_url: str) -> tuple[camera.Ask, str]:

@@ -41,8 +41,14 @@ class Agent:
         system_prompt: str = SYSTEM_PROMPT,
         max_turns: int = 10,
         tools: Tools | None = None,
+        context: Callable[[], str] | None = None,
+        on_turn: Callable[[list[dict[str, Any]]], None] | None = None,
     ) -> None:
+        """`context()` is appended to the system prompt each round (memory briefing);
+        `on_turn(turn)` gets each completed turn (user, assistant and tool messages)."""
         self._chat = chat
+        self._context = context
+        self._on_turn = on_turn
         self._system_prompt = system_prompt
         self._max_turns = max_turns
         self._tools = tools
@@ -53,6 +59,11 @@ class Agent:
     def history(self) -> list[dict[str, Any]]:
         return [m for turn in self._turns for m in turn]
 
+    def preload(self, messages: list[dict[str, Any]]) -> None:
+        """Seed history with earlier (user, assistant) pairs, e.g. from before a restart."""
+        pairs = [messages[i : i + 2] for i in range(0, len(messages) - 1, 2)]
+        self._turns = [*pairs, *self._turns][-self._max_turns :]
+
     async def answer(self, text: str) -> AsyncIterator[str]:
         """Stream the answer to `text`, running tool calls in between.
 
@@ -61,7 +72,9 @@ class Agent:
         """
         turn: list[dict[str, Any]] = [{"role": "user", "content": text}]
         for _ in range(MAX_ROUNDS):
-            messages = [{"role": "system", "content": self._system_prompt}, *self.history, *turn]
+            extra = self._context() if self._context else ""
+            system = f"{self._system_prompt}\n\n{extra}" if extra else self._system_prompt
+            messages = [{"role": "system", "content": system}, *self.history, *turn]
             parts: list[str] = []
             calls: list[ToolCall] = []
             async for piece in self._chat(messages):
@@ -99,3 +112,5 @@ class Agent:
             yield GAVE_UP
             turn.append({"role": "assistant", "content": GAVE_UP})
         self._turns = [*self._turns, turn][-self._max_turns :]
+        if self._on_turn:
+            self._on_turn(turn)

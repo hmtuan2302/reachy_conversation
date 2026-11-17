@@ -142,3 +142,47 @@ async def test_action_flagged_for_reply_gets_a_follow_up_answer() -> None:
     chat = _tool_chat([[call], ["Why did the robot cross the road?"]])
     agent = Agent(chat, tools=FakeTools(silent=True))
     assert await _ask(agent, "turn left and tell me a joke") == "Why did the robot cross the road?"
+
+
+async def test_context_is_appended_to_system_prompt_each_round() -> None:
+    chat = FakeChat()
+    calls = iter(["[memory] A", "[memory] B"])
+    agent = Agent(chat, context=lambda: next(calls))
+    await _ask(agent, "q1")
+    await _ask(agent, "q2")
+    assert chat.calls[0][0]["content"] == f"{SYSTEM_PROMPT}\n\n[memory] A"
+    assert chat.calls[1][0]["content"] == f"{SYSTEM_PROMPT}\n\n[memory] B"
+
+
+async def test_empty_context_leaves_prompt_unchanged() -> None:
+    chat = FakeChat()
+    await _ask(Agent(chat, context=lambda: ""), "q1")
+    assert chat.calls[0][0]["content"] == SYSTEM_PROMPT
+
+
+async def test_on_turn_gets_completed_turn_only() -> None:
+    seen: list[list[dict[str, Any]]] = []
+    agent = Agent(FakeChat(fail_on=2), on_turn=seen.append)
+    await _ask(agent, "q1")
+    with pytest.raises(LLMError):
+        await _ask(agent, "q2")
+    assert seen == [
+        [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1 done"}]
+    ]
+
+
+async def test_preload_seeds_history_before_new_turns() -> None:
+    chat = FakeChat()
+    agent = Agent(chat, max_turns=2)
+    agent.preload(
+        [
+            {"role": "user", "content": "old1"},
+            {"role": "assistant", "content": "r1"},
+            {"role": "user", "content": "old2"},
+            {"role": "assistant", "content": "r2"},
+            {"role": "user", "content": "old3"},
+            {"role": "assistant", "content": "r3"},
+        ]
+    )
+    await _ask(agent, "new")
+    assert [m["content"] for m in chat.calls[0][1:]] == ["old2", "r2", "old3", "r3", "new"]
