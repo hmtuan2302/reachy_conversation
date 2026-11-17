@@ -53,6 +53,8 @@ The system prompt is assembled at session start and on reconnect:
 
 > **Update 2026-11-17:** Phase 1 is built and replaces the schema below: facts with validity times, conversation episodes, follow-ups, FTS5 search, a once-per-session briefing and a background consolidator. Design: `docs/superpowers/specs/2026-11-17-memory-design.md`; usage: `docs/usage/memory.md`. The original M7 design is kept below for history.
 
+> **Update 2026-11-17 (smart context):** search is now hybrid: keywords (FTS5) plus local `embeddinggemma-300m` vectors (ONNX Runtime, `embed` extra) plus recency, for `recall` and for finding the fact a new one replaces. Step 2 adds a per-turn push of related memories. Design: `docs/superpowers/specs/2026-11-17-smart-context-design.md`.
+
 SQLite file `data/memory.db` (stdlib `sqlite3`, WAL mode) **[arch]**:
 
 ```sql

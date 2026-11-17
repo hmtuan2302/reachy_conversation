@@ -38,7 +38,43 @@ GEMINI_API_KEY=...           # text → speech (not needed with --no-speak or TT
 # TTS_PLAYER=none            # optional: save WAVs only, don't play. Default plays through Windows ffplay.exe
 # SAVE_SPEECH=off            # optional: don't save each answer to data/speech/ (no "(saved ...)" line)
 # MEMORY=off                 # optional: no long-term memory (see memory.md)
+# CONTEXT_MAX_TOKENS=8000    # optional: cap for each LLM request (system prompt + memory + tools + history), approx chars/4
+# MEMORY_MAX_TOKENS=600      # optional: the memory block's share of that cap
+# CONTEXT_DEBUG=on           # optional: print the context the model gets (see "Debugging the context")
 ```
+
+Each request stays under `CONTEXT_MAX_TOKENS`: when it would go over, the oldest whole turns of the conversation are left out (never half a turn, never your current question). Nothing is deleted, so a later, smaller request can send them again.
+
+### Debugging the context
+
+Set `CONTEXT_DEBUG=on` in `.env` (or `CONTEXT_DEBUG=on uv run reachy-demo agent --type`) to see what the model is given, printed before and during each answer:
+
+```
+you: I'm thinking about cooking seafood for dinner tonight.
+bot: 
+  ┌ memory block
+  │ [memory] Now: Mon 17 Nov 2026 20:00. You are talking to Tuan (owner); last talked 1 day ago.
+  │ Known about Tuan:
+  │ - Tuan has a sister named Mai. (said, 2 weeks ago)
+  │ Use recall for anything else. ...
+  └
+bot: 
+  ┌ related memories
+  │ [related memories — use only if it fits the conversation]
+  │ - fact: Tuan is allergic to shrimp. [said, 4 days ago]
+  └
+bot: Careful, you're allergic to shrimp, so maybe grilled fish?
+```
+
+| Block | Shown |
+|---|---|
+| `memory block` | When it changes, so once per conversation (it's built at the start) |
+| `related memories` | Each turn that has some (needs memory search by meaning, see [memory.md](memory.md#related-memories-every-turn)) |
+| `tool <name>` | Every tool result as it comes back, e.g. `tool recall` with what memory search found, or `tool turn_head` |
+
+It only prints; nothing changes in what's sent, stored or spoken. Off by default. `bot: ` is printed again after each block so the answer stays on its own line.
+
+With memory's related memories on (`MEMORY_PUSH`, see [memory.md](memory.md#related-memories-every-turn)), up to 3 short memory lines are sent in front of your message. They count as part of your current turn, and startup checks that 200 tokens are left for them.
 
 Playback uses **Windows `ffplay.exe`**, which comes with `winget install Gyan.FFmpeg.Essentials` (see [transcribe.md](transcribe.md)). It plays on the Windows default output, e.g. your headset.
 
@@ -114,12 +150,12 @@ Tune when it ducks with `VAD_RMS` in `.env` (default 500). `uv run python script
 With `--robot`, the agent can move Reachy's head, dance and look through its camera when you ask it to: "turn left", "look up", "quay sang phải và nhìn xuống", "dance and tell me a joke", "what is this?".
 
 ```bash
-uv sync --extra robot --extra mic              # once: Reachy Mini SDK, dances library, laptop mic
+uv sync --extra robot --extra mic --extra embed   # once: Reachy Mini SDK, dances library, laptop mic, memory search by meaning
 uv run reachy-demo agent --mic --robot         # robot at ROBOT_HOST in .env (use its IP)
 uv run reachy-demo agent --type --robot        # or type the commands
 ```
 
-A plain `uv sync` removes the SDK again, so always sync with both extras.
+`uv sync` installs exactly the extras you list and removes the others: a plain `uv sync` removes the SDK again, and leaving out `--extra embed` turns memory search by meaning off (`memory search: keywords only (install: …)`). Always list every extra you use, e.g. add `--extra vieneu` for local TTS.
 
 ### The tools
 
@@ -280,6 +316,10 @@ If it plays back as silence, the mic route isn't delivering sound (see the mic s
 | `config error: DEEPSEEK_API_KEY is required` (exit 2) | Add the key to `.env` |
 | `config error: HF_TOKEN is required` (exit 2) | Add the HF token to `.env` (speech-to-text, and the camera with `VISION_PROVIDER=hf`), or use `--type` |
 | `config error: VISION_PROVIDER must be one of hf, deepseek` (exit 2) | Fix `VISION_PROVIDER` in `.env` |
+| `config error: CONTEXT_MAX_TOKENS must be a positive integer` (or `MEMORY_MAX_TOKENS`) (exit 2) | Use a whole number above 0 |
+| `config error: MEMORY_MAX_TOKENS must be below CONTEXT_MAX_TOKENS` (exit 2) | Lower `MEMORY_MAX_TOKENS` or raise `CONTEXT_MAX_TOKENS` |
+| `config error: tool specs (~N tokens) leave no room in CONTEXT_MAX_TOKENS` (exit 2) | Raise `CONTEXT_MAX_TOKENS`; the tools alone use about N tokens |
+| `config error: related memories (MEMORY_PUSH) need ~200 more tokens …` (exit 2) | Raise `CONTEXT_MAX_TOKENS` or set `MEMORY_PUSH=off` |
 | `  (no camera: the robot can move but not see)` | The WebRTC camera stream didn't start. Check the robot's network. Head moves still work |
 | Reachy says it can't see, or that it's too dark | The frame was empty, or the vision model failed (or took over 15 s). Check the light and what's in front of the camera. With `deepseek`, check that `VISION_MODEL` sees images (not `deepseek-v4-pro`) |
 | `bot: (error: DeepSeek returned 401: ...)` | The key is wrong or revoked. It **keeps listening**, so fix `.env` and restart |
@@ -291,7 +331,7 @@ If it plays back as silence, the mic route isn't delivering sound (see the mic s
 | `config error: ROBOT_HOST is required` (exit 2) | Set the robot's IP in `.env`, or drop `--robot` |
 | `  (head error: …)` | A head move failed (robot asleep, Wi-Fi drop). Queued moves are dropped and the chat goes on |
 | `robot error: cannot connect to ...` (exit 1), other cause | Robot off, wrong IP, or not on the same Wi-Fi. Under WSL2 use the IP with mirrored networking |
-| `robot error: ... No module named 'reachy_mini'` (exit 1) | Run `uv sync --extra robot --extra mic` |
+| `robot error: ... No module named 'reachy_mini'` (exit 1) | Run `uv sync --extra robot --extra mic --extra embed` (plus any other extras you use) |
 | `transcription stopped: ...` (exit 1) | Speech → text failed (network or token). See [transcribe.md](transcribe.md) |
 | `error: ...` (exit 2) | Bad file or mic problem. See [transcribe.md](transcribe.md) |
 

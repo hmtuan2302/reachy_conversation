@@ -137,3 +137,27 @@ async def test_forget_everything_needs_confirmation() -> None:
     assert len(store.search_facts("tea", OWNER)) == 1
     assert (await _call(t, "forget", everything=True, confirmed=True))["ok"] is True
     assert store.search_facts("tea", OWNER) == []
+
+
+async def test_recall_tool_uses_vectors_and_falls_back_when_embedder_fails() -> None:
+    from reachy_demo.memory.vectors import VectorIndex
+    from tests.unit.fake_embedder import FakeEmbedder
+
+    emb = FakeEmbedder({"claude": "aitool", "tool": "aitool"})
+    t, store = _tools()
+    fid = _add(store, "Tuan codes with Claude.")
+    idx = VectorIndex(emb.model)
+    idx.put("fact", fid, emb.embed(["Tuan codes with Claude."], "doc")[0])
+    hybrid = MemoryTools(store, t._consolidator, speaker=lambda: OWNER, now=lambda: NOW,
+                         embedder=emb, index=idx)  # fmt: skip
+    assert (await _call(hybrid, "recall", query="tool"))["found"] is True
+    broken = MemoryTools(store, t._consolidator, speaker=lambda: OWNER, now=lambda: NOW,
+                         embedder=FakeEmbedder(fail=True), index=idx)  # fmt: skip
+    r = await _call(broken, "recall", query="Claude")
+    assert r["found"] is True and "error" not in r  # keyword path still answers
+
+
+def test_recall_spec_asks_for_standalone_queries() -> None:
+    from reachy_demo.agent.tools.memory import SPECS
+
+    assert "standalone query" in SPECS[0]["function"]["description"]

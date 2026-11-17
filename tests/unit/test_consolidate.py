@@ -308,3 +308,67 @@ async def test_bad_answered_field_closes_nothing() -> None:
     store.add_follow_up(OWNER_ID, "Ask how the exam went.", None)
     await c.consolidate("I went to the market today", OWNER)
     assert len(store.all_open_follow_ups(OWNER_ID)) == 1
+
+
+# -- vectors ---------------------------------------------------------------------------------
+
+from reachy_demo.memory.vectors import VectorIndex  # noqa: E402
+from tests.unit.fake_embedder import FakeEmbedder  # noqa: E402
+
+SYN = {"copilot": "aitool", "claude": "aitool", "codes": "use", "switched": "use"}
+
+
+def _vsetup(
+    emb: FakeEmbedder, *replies: Any
+) -> tuple[MemoryStore, Consolidator, FakeChat, VectorIndex]:
+    store = MemoryStore(":memory:", Clock())
+    store.set_name(OWNER_ID, "Tuan")
+    chat = FakeChat(*replies)
+    idx = VectorIndex(emb.model)
+    return store, Consolidator(store, chat, Clock(), embedder=emb, index=idx), chat, idx
+
+
+def _put(store: MemoryStore, idx: VectorIndex, emb: FakeEmbedder, text: str) -> int:
+    fid = store.add_fact(subject_person_id=OWNER_ID, subject_text="Tuan", text=text)
+    v = emb.embed([text], "doc")[0]
+    store.set_vec("fact", fid, emb.model, v)
+    idx.put("fact", fid, v)
+    return fid
+
+
+async def test_invalidate_found_by_meaning() -> None:
+    emb = FakeEmbedder(SYN)
+    store, c, chat, idx = _vsetup(
+        emb, _extract(_fact("Switched to Claude.")), {"action": "INVALIDATE", "id": 1}
+    )
+    old = _put(store, idx, emb, "Codes with Copilot daily.")
+    await c.consolidate("I switched to Claude now", OWNER)
+    assert "Codes with Copilot daily." in chat.calls[1][1]["content"]  # DECIDE saw it
+    f = store.fact(old)
+    assert f is not None and f.expired == NOW
+    new = [i for i, _ in store.load_vecs("fact", emb.model) if i != old]
+    assert len(new) == 1  # the new fact got a vector; the old one keeps its own
+
+
+async def test_update_reembeds_merged_text() -> None:
+    emb = FakeEmbedder()
+    store, c, _, idx = _vsetup(
+        emb,
+        _extract(_fact("Tuan's dog Bin is a corgi.")),
+        {"action": "UPDATE", "id": 1, "text": "Tuan has a corgi named Bin."},
+    )
+    fid = _put(store, idx, emb, "Tuan has a dog named Bin.")
+    await c.consolidate("Bin is a corgi", OWNER)
+    [(i, v)] = store.load_vecs("fact", emb.model)
+    assert i == fid
+    assert float(v @ emb.embed(["Tuan has a corgi named Bin."], "doc")[0]) > 0.999
+    hits = idx.top(emb.embed(["Tuan has a corgi named Bin."], "doc")[0], "fact", 1, {fid})
+    assert hits[0][1] > 0.999
+
+
+async def test_consolidate_with_broken_embedder_still_writes() -> None:
+    emb = FakeEmbedder(fail=True)
+    store, c, _, _ = _vsetup(emb, _extract(_fact("Tuan has a dog named Bin.")))
+    changes = await c.consolidate("my dog is Bin", OWNER)
+    assert [ch.action for ch in changes] == ["ADD"]
+    assert store.load_vecs("fact", emb.model) == []

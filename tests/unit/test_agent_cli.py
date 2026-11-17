@@ -17,6 +17,7 @@ from reachy_demo.voice.tts import TTSError
 def _memory_off(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never touch the real data/memory.db; the memory tests below opt in with a temp DB."""
     monkeypatch.setenv("MEMORY", "off")
+    monkeypatch.setenv("EMBED", "off")  # unit tests never load the real embedding model
 
 
 async def _turns(*texts: str) -> AsyncIterator[str]:
@@ -429,3 +430,131 @@ def test_memory_on_persists_facts_across_runs(
     assert seen[1][0][1] == {"role": "user", "content": "I have a sister named Mai"}  # preloaded
     assert (tmp_path / "m.db.bak").exists()
     assert "(memory on:" in capsys.readouterr().out
+
+
+def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+
+
+@pytest.mark.parametrize("name", ["CONTEXT_MAX_TOKENS", "MEMORY_MAX_TOKENS"])
+@pytest.mark.parametrize("raw", ["abc", "0", "-5"])
+def test_run_bad_token_budget_returns_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], name: str, raw: str
+) -> None:
+    _keys(monkeypatch)
+    monkeypatch.setenv(name, raw)
+    assert cli.run(_args()) == 2
+    assert name in capsys.readouterr().err
+
+
+def test_run_memory_budget_must_be_below_context(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _keys(monkeypatch)
+    monkeypatch.setenv("CONTEXT_MAX_TOKENS", "500")
+    monkeypatch.setenv("MEMORY_MAX_TOKENS", "600")
+    assert cli.run(_args()) == 2
+    err = capsys.readouterr().err
+    assert "MEMORY_MAX_TOKENS" in err and "CONTEXT_MAX_TOKENS" in err
+
+
+def _typed(monkeypatch: pytest.MonkeyPatch, text: str = "") -> argparse.Namespace:
+    args = _args()
+    args.type = True
+    monkeypatch.setattr("sys.stdin", io.StringIO(text))
+    return args
+
+
+def test_run_tool_specs_over_budget_returns_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Any
+) -> None:
+    _keys(monkeypatch)
+    monkeypatch.setenv("MEMORY", "on")
+    monkeypatch.setenv("MEMORY_DB", str(tmp_path / "m.db"))
+    monkeypatch.setenv("CONTEXT_MAX_TOKENS", "50")
+    monkeypatch.setenv("MEMORY_MAX_TOKENS", "5")
+    assert cli.run(_typed(monkeypatch)) == 2
+    assert "tool specs" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("raw", "expected"), [(None, 8000), ("9000", 9000)])
+def test_run_passes_budget_to_agent(
+    monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: int
+) -> None:
+    _keys(monkeypatch)
+    if raw:
+        monkeypatch.setenv("CONTEXT_MAX_TOKENS", raw)
+    seen: dict[str, Any] = {}
+
+    def spy(*a: Any, **kw: Any) -> Agent:
+        seen.update(kw)
+        return Agent(*a, **kw)
+
+    async def fake_chat(messages: list[dict[str, str]], **kw: Any) -> AsyncIterator[str]:
+        yield "Hi!"
+
+    monkeypatch.setattr(cli, "Agent", spy)
+    monkeypatch.setattr(cli, "chat_events", fake_chat)
+    assert cli.run(_typed(monkeypatch)) == 0
+    assert seen["max_tokens"] == expected  # memory off here, so no tool specs to subtract
+
+
+def test_memory_from_env_prints_search_status(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Any
+) -> None:
+    monkeypatch.setenv("MEMORY", "on")
+    monkeypatch.setenv("MEMORY_DB", str(tmp_path / "m.db"))
+    monkeypatch.setattr(cli, "load_embedder", lambda _env: (None, "keywords only (EMBED=off)"))
+    assert cli.memory_from_env("sk-x", "http://x") is not None
+    assert "(memory search: keywords only (EMBED=off))" in capsys.readouterr().out
+
+
+def test_push_reserve_in_startup_check(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _keys(monkeypatch)
+    monkeypatch.setenv("CONTEXT_MAX_TOKENS", "700")
+    monkeypatch.setenv("MEMORY_MAX_TOKENS", "600")
+    monkeypatch.setattr(cli, "push_status", lambda _m: (True, "on"))
+    assert cli.run(_typed(monkeypatch)) == 2
+    assert "related memories" in capsys.readouterr().err
+    monkeypatch.setattr(cli, "push_status", lambda _m: (False, "off: MEMORY_PUSH=off"))
+    assert cli.run(_typed(monkeypatch)) == 0
+
+
+def test_push_status_reasons(monkeypatch: pytest.MonkeyPatch) -> None:
+    class S:
+        has_vectors = False
+
+    mem: Any = (S(), None)
+    monkeypatch.setenv("MEMORY_PUSH", "on")
+    assert cli.push_status(None) == (False, "off: memory is off")
+    assert cli.push_status(mem) == (False, "off: no embedding model")
+    S.has_vectors = True
+    assert cli.push_status(mem) == (True, "on")
+    monkeypatch.setenv("MEMORY_PUSH", "off")
+    assert cli.push_status(mem) == (False, "off: MEMORY_PUSH=off")
+
+
+@pytest.mark.parametrize(("raw", "on"), [(None, False), ("off", False), ("on", True)])
+def test_context_debug_env(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], raw: str | None, on: bool
+) -> None:
+    _keys(monkeypatch)
+    if raw:
+        monkeypatch.setenv("CONTEXT_DEBUG", raw)
+    seen: dict[str, Any] = {}
+
+    def spy(*a: Any, **kw: Any) -> Agent:
+        seen.update(kw)
+        return Agent(*a, **kw)
+
+    monkeypatch.setattr(cli, "Agent", spy)
+    assert cli.run(_typed(monkeypatch)) == 0
+    assert (seen["debug"] is not None) is on
+    if on:
+        seen["debug"]("related memories", "[related memories]\n- fact: x")
+        out = capsys.readouterr().out
+        assert "  ┌ related memories\n  │ [related memories]\n  │ - fact: x\n  └\nbot: " in out

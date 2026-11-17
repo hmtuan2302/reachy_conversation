@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
+
 log = logging.getLogger(__name__)
 
 OWNER_ID = 1
@@ -210,7 +212,17 @@ def _v2_identity_in_people(db: sqlite3.Connection, now: float) -> None:
 
 Migration = str | Callable[[sqlite3.Connection, float], None]
 V3_DESCRIPTION = "ALTER TABLE people ADD COLUMN description TEXT NOT NULL DEFAULT '';"
-MIGRATIONS: list[Migration] = [SCHEMA_V1, _v2_identity_in_people, V3_DESCRIPTION]
+V4_VECTORS = """
+CREATE TABLE fact_vecs(
+  fact_id INTEGER NOT NULL REFERENCES facts(id) ON DELETE CASCADE,
+  model TEXT NOT NULL, vec BLOB NOT NULL, PRIMARY KEY(fact_id, model));
+CREATE TABLE episode_vecs(
+  episode_id INTEGER NOT NULL REFERENCES episodes(id) ON DELETE CASCADE,
+  model TEXT NOT NULL, vec BLOB NOT NULL, PRIMARY KEY(episode_id, model));
+"""
+MIGRATIONS: list[Migration] = [SCHEMA_V1, _v2_identity_in_people, V3_DESCRIPTION, V4_VECTORS]
+VecKind = Literal["fact", "episode"]
+_VEC_TABLE = {"fact": ("fact_vecs", "fact_id"), "episode": ("episode_vecs", "episode_id")}
 
 # Small EN + VN list: words that would make every fact match. Not exhaustive on purpose.
 _STOPWORDS_TEXT = """
@@ -447,6 +459,7 @@ class MemoryStore:
         return _fact(row) if row else None
 
     def update_fact(self, fact_id: int, text: str, text_original: str | None = None) -> None:
+        self._db.execute("DELETE FROM fact_vecs WHERE fact_id=?", (fact_id,))  # old wording
         if text_original is None:
             self._db.execute("UPDATE facts SET text=? WHERE id=?", (text, fact_id))
         else:
@@ -512,21 +525,7 @@ class MemoryStore:
             "JOIN facts f ON f.id=facts_fts.rowid WHERE facts_fts MATCH ?"
         )
         args: list[Any] = [match]
-        sql, args = _scope(sql, args, speaker)
-        if person_id is not None:
-            sql += " AND f.subject_person_id=?"
-            args.append(person_id)
-        if subject_text:
-            sql += " AND f.subject_text LIKE ?"
-            args.append(f"%{subject_text}%")
-        if start is None or end is None:
-            sql += " AND f.expired IS NULL"
-        else:
-            sql += (
-                " AND coalesce(f.valid_from, f.created) < ? "
-                "AND coalesce(f.valid_to, f.expired, ?) >= ?"
-            )
-            args += [end, FOREVER, start]
+        sql, args = _fact_filters(sql, args, speaker, person_id, subject_text, start, end)
         sql += " ORDER BY rank LIMIT ?"
         args.append(limit)
         return [(_fact(r), float(r["rank"])) for r in self._db.execute(sql, args)]
@@ -601,20 +600,91 @@ class MemoryStore:
             args.append(match)
         else:
             sql = "SELECT e.*, 0.0 AS rank FROM episodes e WHERE 1"
-        if speaker.role != "owner":
-            sql += " AND " + _HAS_PERSON.replace("person_ids_json", "e.person_ids_json")
-            args.append(speaker.person_id)
-        if start is not None and end is not None:
-            sql += " AND e.start < ? AND e.end >= ?"
-            args += [end, start]
-        elif match is None:
+        if match is None and (start is None or end is None):
             return []
+        sql, args = _episode_filters(sql, args, speaker, start, end)
         sql += " ORDER BY rank, e.start DESC LIMIT ?"
         args.append(limit)
         rows = self._db.execute(sql, args).fetchall()
         if not rows and match is not None and start is not None and end is not None:
             return self.search_episodes("", speaker, start=start, end=end, limit=limit)
         return [(_episode(r), float(r["rank"])) for r in rows]
+
+    # -- vectors -----------------------------------------------------------------------------
+
+    def set_vec(self, kind: VecKind, item_id: int, model: str, vec: np.ndarray) -> None:
+        table, col = _VEC_TABLE[kind]
+        self._db.execute(
+            f"INSERT OR REPLACE INTO {table}({col}, model, vec) VALUES (?,?,?)",  # noqa: S608
+            (item_id, model, np.asarray(vec, dtype="<f4").tobytes()),
+        )
+
+    def load_vecs(self, kind: VecKind, model: str) -> list[tuple[int, np.ndarray]]:
+        table, col = _VEC_TABLE[kind]
+        rows = self._db.execute(
+            f"SELECT {col}, vec FROM {table} WHERE model=? ORDER BY {col}",  # noqa: S608
+            (model,),
+        ).fetchall()
+        return [(int(r[0]), np.frombuffer(r[1], dtype="<f4").copy()) for r in rows]
+
+    def missing_vecs(self, kind: VecKind, model: str, limit: int) -> list[tuple[int, str]]:
+        """Rows without a vector for `model`: current facts, or episode summaries."""
+        if kind == "fact":
+            sql = (
+                "SELECT id, text FROM facts WHERE expired IS NULL AND id NOT IN "
+                "(SELECT fact_id FROM fact_vecs WHERE model=?) ORDER BY id LIMIT ?"
+            )
+        else:
+            sql = (
+                "SELECT id, summary FROM episodes WHERE id NOT IN "
+                "(SELECT episode_id FROM episode_vecs WHERE model=?) ORDER BY id LIMIT ?"
+            )
+        return [(int(r[0]), str(r[1])) for r in self._db.execute(sql, (model, limit))]
+
+    def allowed_ids(
+        self,
+        kind: VecKind,
+        speaker: Speaker,
+        *,
+        person_id: int | None = None,
+        subject_text: str | None = None,
+        start: float | None = None,
+        end: float | None = None,
+        include_sensitive: bool = True,
+    ) -> set[int]:
+        """Ids the speaker may see under the same filters as keyword search (no text match).
+
+        Facts: current only unless a time window is given, as in `search_facts`.
+        """
+        args: list[Any] = []
+        if kind == "fact":
+            sql = "SELECT f.id FROM facts f WHERE 1"
+            if not include_sensitive:
+                sql += " AND f.sensitive=0"
+            sql, args = _fact_filters(sql, args, speaker, person_id, subject_text, start, end)
+        else:
+            sql = "SELECT e.id FROM episodes e WHERE e.importance > 0"
+            sql, args = _episode_filters(sql, args, speaker, start, end)
+            if person_id is not None:
+                sql += " AND " + _HAS_PERSON.replace("person_ids_json", "e.person_ids_json")
+                args.append(person_id)
+        return {int(r[0]) for r in self._db.execute(sql, args)}
+
+    def facts_by_ids(self, ids: list[int]) -> list[Fact]:
+        if not ids:
+            return []
+        marks = ",".join("?" * len(ids))
+        rows = self._db.execute(f"SELECT * FROM facts WHERE id IN ({marks})", ids)  # noqa: S608
+        found = {r["id"]: _fact(r) for r in rows}
+        return [found[i] for i in ids if i in found]
+
+    def episodes_by_ids(self, ids: list[int]) -> list[Episode]:
+        if not ids:
+            return []
+        marks = ",".join("?" * len(ids))
+        rows = self._db.execute(f"SELECT * FROM episodes WHERE id IN ({marks})", ids)  # noqa: S608
+        found = {r["id"]: _episode(r) for r in rows}
+        return [found[i] for i in ids if i in found]
 
     # -- follow-ups --------------------------------------------------------------------------
 
@@ -675,6 +745,46 @@ class MemoryStore:
 
 
 _HAS_PERSON = "EXISTS (SELECT 1 FROM json_each(person_ids_json) WHERE value = ?)"
+
+
+def _fact_filters(
+    sql: str,
+    args: list[Any],
+    speaker: Speaker,
+    person_id: int | None,
+    subject_text: str | None,
+    start: float | None,
+    end: float | None,
+) -> tuple[str, list[Any]]:
+    """Scope, person, subject and validity clauses on `facts f`, shared by search and vectors."""
+    sql, args = _scope(sql, args, speaker)
+    if person_id is not None:
+        sql += " AND f.subject_person_id=?"
+        args = [*args, person_id]
+    if subject_text:
+        sql += " AND f.subject_text LIKE ?"
+        args = [*args, f"%{subject_text}%"]
+    if start is None or end is None:
+        sql += " AND f.expired IS NULL"
+    else:
+        sql += (
+            " AND coalesce(f.valid_from, f.created) < ? AND coalesce(f.valid_to, f.expired, ?) >= ?"
+        )
+        args = [*args, end, FOREVER, start]
+    return sql, args
+
+
+def _episode_filters(
+    sql: str, args: list[Any], speaker: Speaker, start: float | None, end: float | None
+) -> tuple[str, list[Any]]:
+    """Guest scope and time window on `episodes e`, shared by search and vectors."""
+    if speaker.role != "owner":
+        sql += " AND " + _HAS_PERSON.replace("person_ids_json", "e.person_ids_json")
+        args = [*args, speaker.person_id]
+    if start is not None and end is not None:
+        sql += " AND e.start < ? AND e.end >= ?"
+        args = [*args, end, start]
+    return sql, args
 
 
 def _scope(sql: str, args: list[Any], speaker: Speaker) -> tuple[str, list[Any]]:

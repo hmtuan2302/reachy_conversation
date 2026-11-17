@@ -14,7 +14,9 @@ from datetime import datetime
 from typing import Any
 
 from reachy_demo.memory.prompts import DECIDE, DESCRIBE, EXTRACT, ChatFn, ask_json
+from reachy_demo.memory.recall import hybrid_facts
 from reachy_demo.memory.store import Clock, MemoryStore, Speaker, content_words, own_name_fact
+from reachy_demo.memory.vectors import Embedder, VectorIndex, embed_one, store_vec
 
 log = logging.getLogger(__name__)
 
@@ -52,9 +54,18 @@ class Change:
 
 class Consolidator:
     def __init__(
-        self, store: MemoryStore, chat: ChatFn, clock: Clock, *, timeout_s: float = 10.0
+        self,
+        store: MemoryStore,
+        chat: ChatFn,
+        clock: Clock,
+        *,
+        timeout_s: float = 10.0,
+        embedder: Embedder | None = None,
+        index: VectorIndex | None = None,
     ) -> None:
         self._store = store
+        self._embedder = embedder
+        self._index = index
         self._chat = chat
         self._clock = clock
         self._timeout_s = timeout_s
@@ -166,12 +177,22 @@ class Consolidator:
             log.warning("memory describe failed; description unchanged")
 
     async def _apply(self, cand: dict[str, Any], speaker: Speaker, event_id: int | None) -> Change:
-        similar = self._store.search_facts(
-            cand["text"], speaker, person_id=speaker.person_id, limit=5
-        )
+        vec = await embed_one(self._embedder, cand["text"], "doc") if self._index else None
+        similar = [
+            f
+            for _, f in hybrid_facts(
+                self._store,
+                speaker,
+                cand["text"],
+                vec,
+                self._index,
+                person_id=speaker.person_id,
+                limit=5,
+            )
+        ]
         decision: dict[str, Any] = {"action": "ADD"}
         if similar:
-            listing = "\n".join(f"{f.id}: {f.text}" for f, _ in similar)
+            listing = "\n".join(f"{f.id}: {f.text}" for f in similar)
             got = await ask_json(
                 self._chat,
                 DECIDE,
@@ -181,9 +202,7 @@ class Consolidator:
             decision = got or decision  # decide failed: keep the fact (a later dedupe merges it)
         action = str(decision.get("action", "ADD")).upper()
         raw_id = decision.get("id")
-        target = (
-            raw_id if isinstance(raw_id, int) and raw_id in {f.id for f, _ in similar} else None
-        )
+        target = raw_id if isinstance(raw_id, int) and raw_id in {f.id for f in similar} else None
         if action in ("UPDATE", "INVALIDATE") and target is None:
             log.warning("memory decide used an id it was not given: %r", raw_id)
             action = "ADD"
@@ -200,6 +219,25 @@ class Consolidator:
             "valid_to",
         )
         fields = {k: cand[k] for k in keys}
+        change = self._write(action, target, decision, cand, fields, speaker, evidence)
+        if change.action != "NOOP" and change.fact_id is not None:
+            same = change.text == cand["text"]
+            await store_vec(
+                self._store, self._index, self._embedder, "fact", change.fact_id, change.text,
+                vec if same else None,
+            )  # fmt: skip
+        return change
+
+    def _write(
+        self,
+        action: str,
+        target: int | None,
+        decision: dict[str, Any],
+        cand: dict[str, Any],
+        fields: dict[str, Any],
+        speaker: Speaker,
+        evidence: list[int],
+    ) -> Change:
         with self._store.transaction():
             if action == "NOOP":
                 return Change("NOOP", None, cand["text"])

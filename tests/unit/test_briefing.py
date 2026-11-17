@@ -1,7 +1,8 @@
 from datetime import UTC
 
-from reachy_demo.memory.briefing import CAP_CHARS, RULE, ago, build_briefing
+from reachy_demo.memory.briefing import DEFAULT_MEMORY_TOKENS, RULE, ago, build_briefing
 from reachy_demo.memory.store import OWNER, OWNER_ID, MemoryStore
+from reachy_demo.ops.tokens import est_tokens
 
 DAY = 86400.0
 NOW = 100 * DAY
@@ -91,7 +92,7 @@ def test_preferences_get_their_own_block() -> None:
     assert text.index("Preferences:") < text.index("Tuan wants short answers.")
 
 
-def test_cap_trims_facts_first_keeps_five_and_all_episodes() -> None:
+def _crowded() -> MemoryStore:
     s, _ = _store()
     for i in range(5):
         s.add_episode(
@@ -109,8 +110,12 @@ def test_cap_trims_facts_first_keeps_five_and_all_episodes() -> None:
             text=f"fact {i} " + "y" * 150,
             importance=1 - i / 20,
         )
-    text = _brief(s)
-    assert len(text) <= CAP_CHARS or text.count("fact ") == 5
+    return s
+
+
+def test_cap_trims_facts_first_keeps_five_and_all_episodes() -> None:
+    text = _brief(_crowded())
+    assert est_tokens(text) <= DEFAULT_MEMORY_TOKENS or text.count("fact ") == 5
     assert 5 <= text.count("fact ") < 10
     assert all(f"episode {i}" in text for i in range(5))
     assert "fact 0" in text  # highest score kept
@@ -124,3 +129,23 @@ def test_ago() -> None:
     assert ago(3 * DAY) == "3 days ago"
     assert ago(21 * DAY) == "3 weeks ago"
     assert ago(90 * DAY) == "3 months ago"
+
+
+def test_briefing_respects_cap_tokens() -> None:
+    s = _crowded()
+    small = build_briefing(s, OWNER, NOW, UTC, cap_tokens=300)
+    assert est_tokens(small) <= 300 or small.count("fact ") == 5
+    big = build_briefing(s, OWNER, NOW, UTC, cap_tokens=10_000)
+    assert small.count("fact ") < big.count("fact ")
+
+
+def test_briefing_parts_ids_match_text() -> None:
+    from reachy_demo.memory.briefing import build_briefing_parts
+
+    s, _ = _store()
+    fid = s.add_fact(subject_person_id=OWNER_ID, subject_text="Tuan", text="Tuan has a dog Bin.")
+    eid = s.add_episode(session_id="a", start=NOW - DAY, end=NOW - DAY, person_ids=[OWNER_ID],
+                        summary="Talked about Bin.", topics=[])  # fmt: skip
+    b = build_briefing_parts(s, OWNER, NOW, UTC)
+    assert b.fact_ids == {fid} and b.episode_ids == {eid}
+    assert b.text == _brief(s)

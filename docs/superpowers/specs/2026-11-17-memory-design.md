@@ -44,6 +44,8 @@ What success looks like: the scripted memory test set (§8) passes its targets, 
 | C | SQLite + FTS5 + `sqlite-vec` + local embeddings from day one (research §6.2–6.3 as written). | Best paraphrase and cross-language recall; two new dependencies, a model file, re-embedding on model change, ~10–20 ms per sentence **[verify]**. |
 | D | Mem0 / Zep / Graphiti as a library or service. | Proven, but brings a vector DB or graph server, heavy deps, and cloud-shaped defaults. Against the lean single-process rule. |
 
+> **Update 2026-11-17:** the owner chose **C** (local embeddings) for proactive recall and paraphrase, not because the eval failed. It uses `embeddinggemma-300m` through ONNX Runtime and two plain SQLite tables with numpy cosine search instead of `sqlite-vec`. Design: [2026-11-17-smart-context-design.md](2026-11-17-smart-context-design.md).
+
 **Pick: B**, with C as a planned upgrade gated by the eval (Phase 1, step 1.8). A is kept as the **baseline** the eval must beat. D is ruled out by the dependency and single-process rules.
 
 **Identity in Phase 1 [my call: single user].** Every turn is attributed to the owner (`speaker = Speaker(person_id=OWNER, role="owner")`). All memory code takes a `Speaker` so M8 only has to fill it in. The alternative (build voice enrolment + speaker ID inside Phase 1) roughly doubles Phase 1 and pulls M8 forward.
@@ -116,6 +118,8 @@ P1: always the owner. M8: the gate sets it per turn; an unknown voice gets a ses
 ---
 
 ## 6. Data model (full schema; each phase creates only its tables)
+
+> **Schema v4 (2026-11-17):** `fact_vecs(fact_id → facts ON DELETE CASCADE, model, vec)` and `episode_vecs(episode_id → episodes ON DELETE CASCADE, model, vec)`, 256 × float32 per row. See the smart-context design §6.
 
 `store.py` holds a list of migrations; `meta(key, value)` stores `schema_version`. Each migration runs in one transaction; the DB file is copied to `memory.db.bak-<version>` before a migration runs. WAL mode, `foreign_keys=ON`, all times as UTC epoch seconds (REAL).
 
@@ -345,6 +349,7 @@ Algorithm:
 - **Latency:** the briefing is built once per session from SQL in under 1 ms (eval p95 0.5 ms). That is far inside the 150 ms budget. The p95 added turn latency on the real robot isn't measured yet **[verify]**.
 - **Background cost:** 1.7 memory LLM calls per turn in the eval (extract, plus decide when similar facts exist; summaries per session).
 - `forget` also deletes the logged turns a fact came from (`evidence_json`). Episode summaries that mention a forgotten fact stay until "forget everything" (limit, P3).
+- **Smart context, step 1 (2026-11-17):** hybrid `recall` and consolidator lookup (keywords + embeddinggemma vectors + recency), schema v4 vector tables, background backfill, `memory embed`. Eval results: smart-context design §13.
 - Not built in P1, as designed: identity (M8), the `memory list/show/export` CLI (P3), the LLM judge in the eval (keyword scoring, marked as a shortcut).
 ---
 

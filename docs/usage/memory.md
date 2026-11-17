@@ -6,7 +6,10 @@ An example (the exact words vary):
 
 ```
 $ uv run reachy-demo agent --type
+  (memory search: loading the embedding model...)
+  (memory search: hybrid (embeddinggemma-300m))
   (memory on: data/memory.db)
+  (memory push: on)
 you: Hi, I'm Tuấn. Thứ sáu này tôi có bài thi toán.
 bot: Chào Tuấn! Chúc bạn thi tốt nhé.
 ^D
@@ -20,7 +23,21 @@ you: What's my mother's name?
 bot: I don't remember you telling me that.
 ```
 
-Memory is **on by default** for `reachy-demo agent`, with or without `--robot`. Nothing to set up: it uses the same `DEEPSEEK_API_KEY` as the agent.
+Memory is **on by default** for `reachy-demo agent`, with or without `--robot`. It uses the same `DEEPSEEK_API_KEY` as the agent. Search by meaning needs a one-time setup ([below](#first-time-setup-search-by-meaning)); without it, memory still works with keyword search.
+
+## First-time setup: search by meaning
+
+Reachy finds memories by meaning with a local embedding model, [embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m). It runs on the laptop CPU through ONNX Runtime (no torch, no GPU), and nothing leaves the laptop.
+
+1. Install the extra (adds `tokenizers` and `huggingface-hub`):
+   ```bash
+   uv sync --extra embed            # add your other extras too, e.g. --extra vieneu --extra mic
+   ```
+   `uv sync` installs exactly the extras you list, so list all of them. Leaving out `--extra vieneu` uninstalls VieNeu.
+2. Make sure `HF_TOKEN` is in `.env` (the same token as speech-to-text). The model is under the Gemma license: if the download says it's gated, accept the license on the model page once.
+3. Start the agent. The first start downloads about **1.2 GB** into `models/onnx-community--embeddinggemma-300m-ONNX/` (git-ignored); later starts load it in under a second, offline.
+
+Memories you already had get their vectors in the background, 200 at a time, once nobody has talked to Reachy for a minute (so it never slows a reply). If an embedding fails, it's retried at the next idle moment. To do them all at once: `uv run reachy-demo memory embed`.
 
 ## What it remembers
 
@@ -51,7 +68,7 @@ Everything is automatic. You can also be explicit:
 | You say | What happens |
 |---|---|
 | "Remember that my wifi password is …" | Stored (`remember` tool), even sensitive things. Sensitive facts are never brought up on their own |
-| "What do you know about me?", "What did we talk about yesterday?", "hôm qua mình nói gì?" | Searched (`recall` tool), by keywords, person and time ("yesterday", "last Tuesday", "sáng nay", "tuần trước") |
+| "What do you know about me?", "What did we talk about yesterday?", "hôm qua mình nói gì?" | Searched (`recall` tool) by meaning and keywords, person and time ("yesterday", "last Tuesday", "sáng nay", "tuần trước") |
 | "Forget that I have a cat" | Deleted. With several matches, Reachy asks which one |
 | "Forget everything about me" | Reachy asks "are you sure?" first, then deletes all your facts, conversations, follow-ups and logged turns |
 
@@ -59,7 +76,7 @@ Sensitive things (health, money, passwords, ID numbers, exact addresses) are onl
 
 ## What Reachy knows at the start of each conversation
 
-When a conversation starts, a `[memory]` block (about 600 tokens at most) is added to the prompt. It's built from the database in under a millisecond, with no LLM call:
+When a conversation starts, a `[memory]` block (at most `MEMORY_MAX_TOKENS`, default 600) is added to the prompt. It's built from the database in under a millisecond, with no LLM call:
 
 ```
 [memory] Now: Mon 17 Nov 2026 19:05. You are talking to Tuan (owner; earlier name: Ha); last talked 2 days ago.
@@ -78,17 +95,79 @@ It holds your name, preferences, due follow-ups, the **last 5 conversation summa
 
 If you restart within **2 hours**, the last 5 turns are also reloaded into the conversation, so Reachy picks up where it left off.
 
+## How Reachy finds what's relevant
+
+Three things bring memories into a reply:
+
+| | When | What |
+|---|---|---|
+| **`[memory]` block** | Once per conversation | Name, preferences, follow-ups, last 5 conversations, top 10 facts (above) |
+| **Related memories** | Every turn, before Reachy answers | Up to 3 memories close in meaning to what you just said |
+| **`recall`** | When the agent decides to search | Anything else: questions about the past, names, dates |
+
+### Related memories (every turn)
+
+Before each answer, Reachy embeds what you just said (with your previous 2 turns, so "what about her?" still means Mai) and looks for memories close in meaning. Up to 3 that are clearly related are added in front of your message:
+
+```
+[related memories — use only if it fits the conversation]
+- fact: Tuan is allergic to shrimp. [said, 4 days ago]
+- conversation Sat 15 Nov 2026 20:10: Tuan planned a seafood dinner with Mai.
+you: I'm thinking about cooking seafood for dinner tonight.
+```
+
+So Reachy can say "careful, no shrimp for you" without being asked. Details:
+
+- Often there are **none**: a memory must be similar enough (0.55), so unrelated chat ("what's 17 × 23?") gets nothing.
+- Small talk ("ok", "haha", "thanks") reuses the previous turn's memories, with no new embedding.
+- Memories already in the `[memory]` block, sensitive facts and other people's memories are never added.
+- It's **never stored**: not in the conversation history, not in the turn the memory writer reads. So it can't turn into a new fact, and old blocks don't pile up.
+- It costs one embedding per turn, about 20 ms (up to ~125 ms for a long sentence), before the answer starts.
+- Being pushed doesn't count as "used", so it doesn't change which facts the `[memory]` block shows.
+- To see them, set `CONTEXT_DEBUG=on`: before each answer the console prints the `[memory]` block (once per conversation), the related memories and every `recall` result ([agent.md](agent.md#debugging-the-context)).
+
+### `recall`
+
+The `[memory]` block and related memories cover a few memories. Everything else is found with **`recall`**, which the agent calls when you ask about the past or mention something personal it doesn't see.
+
+`recall` combines three rankings and keeps the best 5:
+
+| Ranking | Finds |
+|---|---|
+| **Meaning** (vectors) | "Which AI assistant do I use when I code?" → "Tuan uses Claude for programming", with no word in common. Works across Vietnamese and English |
+| **Keywords** (SQLite full-text) | Exact names and rare words: "Sapiens", "VNG", "Bin" |
+| **Recency** | Newer memories first when the other two tie |
+
+The same search runs when a new fact is saved, to find the old fact it replaces. So "I switched to Claude for programming" closes "Tuan writes code with GitHub Copilot" even though the two share no words, and Reachy stops mentioning Copilot.
+
+Each memory's vector is computed **once**, when it's saved (in the background, not while Reachy answers). Each `recall` embeds only its own short query, about 20–100 ms on this laptop.
+
+Guests: the vector search only looks at memories the speaker is allowed to see, the same rule as keyword search.
+
 ## Settings (`.env`)
 
 ```
 # MEMORY=off                  # turn memory off entirely: the agent works exactly as before
 # MEMORY_DB=data/memory.db    # where memory lives (one SQLite file; data/ is git-ignored)
 # MEMORY_MODEL=deepseek-chat  # LLM for memory writes; keep a fast non-reasoning model
+# MEMORY_MAX_TOKENS=600       # cap for the [memory] block (approx, chars/4); must be below CONTEXT_MAX_TOKENS (agent.md)
+# EMBED=off                   # keyword-only search (no model download, no vectors)
+# EMBED_MODEL=onnx-community/embeddinggemma-300m-ONNX   # HF repo, or a local folder with tokenizer.json and onnx/model.onnx
+# MEMORY_PUSH=off             # no related memories per turn (recall still searches by meaning)
 ```
+
+With `MEMORY_PUSH` on, the agent keeps 200 tokens of `CONTEXT_MAX_TOKENS` free for the related memories ([agent.md](agent.md)).
 
 ## Files
 
 - `data/memory.db`: everything, in one SQLite file. Older files upgrade themselves on first open (schema v2 on 2026-11-17 moved names out of facts and the language into a fact). Copied to `data/memory.db.bak` on every clean exit, and to `memory.db.bak-<n>` before a schema upgrade.
+- Vectors live in the same file (tables `fact_vecs`, `episode_vecs`, 1 KB per memory, schema v4). They're deleted with the memory they belong to.
+- `models/onnx-community--embeddinggemma-300m-ONNX/`: the embedding model (1.2 GB). Delete it to free space; it downloads again on the next start.
+- **After changing `EMBED_MODEL`**, run `uv run reachy-demo memory embed` once. Vectors are stored per model (the `EMBED_MODEL` value, or the folder name for a local folder), so old ones are simply ignored and every memory is embedded again:
+  ```
+  $ uv run reachy-demo memory embed
+  memory embed: 41 facts, 9 episodes (onnx-community/embeddinggemma-300m-ONNX@256)
+  ```
 - **To start over**, quit the app, then:
   ```bash
   uv run reachy-demo memory reset          # deletes MEMORY_DB (default data/memory.db); asks first
@@ -122,6 +201,10 @@ Result on 2026-11-17 (`deepseek-chat`, one run, 22 questions):
 
 Two description questions were added afterwards ("What kind of person am I?" after a personality turn, and the drink after "I prefer green tea now"). With them, memory scored 24/24 on 2026-11-17. The baseline wasn't rerun.
 
+**Search by meaning (2026-11-17, 39 questions, one run each).** 15 questions were added: `paraphrase` (no word shared with the stored fact, VN and EN), `invalidate` (a changed value must win) and 3 more `multihop`. Keyword-only and hybrid scored the same on paraphrase (8/8) and invalidate (4/4), and both missed 2 multi-hop questions. So on this set the vectors didn't change recall: the agent already writes good English keywords. The query embedding took 17 ms (p95 27 ms).
+
+**Related memories (2026-11-17, 55 questions, one run each).** 16 more: `proactive` (a plain remark; the answer should bring up a stored memory) and `noise` (an unrelated question; no memory may come up). With related memories: 54/55, proactive 7/8, noise 8/8, and the whole per-turn step took 22 ms (p95 25 ms). Keyword-only without related memories: 53/55, proactive also 7/8. So this set shows related memories are fast and quiet, but not yet that they help: most target facts were recent enough to be in the `[memory]` block anyway. A fair test needs many more facts spread over weeks. Results: [smart-context design §13](../superpowers/specs/2026-11-17-smart-context-design.md#13-spike-results).
+
 Memory used 1.7 background LLM calls per turn, and building the briefing took under 1 ms. The baseline has no timestamps, so it can't answer "when" questions. It also sends the whole history on every turn, which grows without limit.
 
 Script format, one JSON object per line:
@@ -138,13 +221,18 @@ An answer counts as correct when it contains any `expect` word (case and accents
 ## Privacy
 
 - The database stays on this laptop.
+- To find related memories, each thing you say is embedded on the laptop. Those vectors stay in RAM for the current conversation only and are never saved.
+- Vectors are computed on the laptop; no text goes anywhere for them. A vector is a fingerprint of the text, so it's deleted together with its fact or conversation ("forget that", "forget everything").
 - The text of each turn worth keeping, and each conversation transcript, goes to DeepSeek for fact extraction and summaries. That's the same provider that already answers every question.
 - Phase 1 treats **every speaker as the owner**. There's no voice ID yet (milestone M8), so anyone talking to Reachy can read and change its memory.
 
 ## Limits
 
-- **Keyword search, no embeddings.** Facts are stored in English, and the agent searches in English keywords, so Vietnamese and English work together. A very different paraphrase can still miss ("my pet" vs. "dog"). If the eval shows misses, the next step is vector search.
-- **The test set is small** (22 questions, one run) and scored by keyword match. 100% means no regressions on these cases, not that memory is perfect.
+- **Search by meaning is approximate.** It finds close wording and translations, but a vague question can still pull a related-but-wrong memory, and a hit below similarity 0.3 is dropped. Keywords still catch exact names.
+- **Related memories can stay quiet or miss.** The 0.55 threshold favours silence over noise; a memory phrased very differently from what you say may not come up. `recall` still finds it when you ask.
+- **CPU cost.** Loading the model takes about 0.6 GB of RAM. Each `recall` adds 20–100 ms (up to ~125 ms for a long sentence). Saving a memory adds a background embedding of the same size.
+- **Without the extra or the model**, memory falls back to keyword search only, and says so at start (`memory search: keywords only (...)`).
+- **The test set is small** (55 questions, one run) and scored by keyword match. 100% means no regressions on these cases, not that memory is perfect.
 - **How follow-ups close.** Two checks:
   - The LLM that already reads each turn for facts also sees your open follow-ups, and says which ones the turn answered. It understands other wording and languages: "thi ổn rồi" or "the test went fine" closes "Ask how the math exam went". Just mentioning the topic ("I'll study for the exam tonight") doesn't close it.
   - Short turns like "yes" skip that LLM call, so a word match is the fallback. A follow-up closes when your words or Reachy's reply share at least 2 topic words with it. That's why "yes" → "I'm back to my own voice" closes "Ask whether … switch back to its own voice", and also why a follow-up closes once Reachy has asked it.
@@ -159,5 +247,14 @@ An answer counts as correct when it contains any `expect` word (case and accents
 | `  (memory off: cannot open data/memory.db: …)` | The file is damaged or not writable. The agent runs without memory. Restore `data/memory.db.bak` or delete the file |
 | Reachy says "I don't remember" about something you told it | Memory is written in the background a few seconds after the turn. Check the logs for `memory extract failed` (DeepSeek error or timeout) |
 | `config error: DEEPSEEK_API_KEY is required` from `memory eval` (exit 2) | Add the key to `.env` |
+| `  (memory search: keywords only (install: uv sync --extra embed))` | The `embed` extra isn't installed. Run the [setup](#first-time-setup-search-by-meaning), listing all your extras |
+| `  (memory search: keywords only (model download failed: …))` | No network, wrong `EMBED_MODEL`, or the model is gated: check `HF_TOKEN` and accept the Gemma license on the model page |
+| `  (memory search: keywords only (model load failed: …))` | `EMBED_MODEL` points at a folder without `tokenizer.json` and `onnx/model.onnx`, or the download was cut off: delete the folder under `models/` and restart |
+| `  (memory search: keywords only (EMBED=off))` | You turned it off in `.env` |
+| `  (memory push: off: no embedding model)` | Related memories need the embedding model; see the `memory search` line above it |
+| `  (memory push: off: MEMORY_PUSH=off)` | You turned it off in `.env` |
+| `config error: related memories (MEMORY_PUSH) need ~200 more tokens …` (exit 2) | Raise `CONTEXT_MAX_TOKENS`, lower `MEMORY_MAX_TOKENS`, or set `MEMORY_PUSH=off` |
+| `config error: memory eval needs the embedding model: …` (exit 2) | `memory eval` refuses to run keyword-only by accident. Fix the model, or set `EMBED=off` to test keyword-only on purpose |
+| `memory embed: no embedder: …` (exit 2) | Same causes as the `memory search: keywords only` lines above |
 
-Code: [src/reachy_demo/memory/](../../src/reachy_demo/memory/) (`store.py` SQLite and queries, `briefing.py`, `recall.py`, `consolidate.py`, `episodes.py`, `session.py`, `timeparse.py`, `prompts.py`), [src/reachy_demo/agent/tools/memory.py](../../src/reachy_demo/agent/tools/memory.py) (tools), [src/reachy_demo/agent/memory_eval.py](../../src/reachy_demo/agent/memory_eval.py) (eval).
+Code: [src/reachy_demo/memory/](../../src/reachy_demo/memory/) (`store.py` SQLite and queries, `briefing.py`, `recall.py`, `embed.py` the model, `vectors.py` the vector index, `related.py` related memories, `consolidate.py`, `episodes.py`, `session.py`, `timeparse.py`, `prompts.py`), [src/reachy_demo/agent/tools/memory.py](../../src/reachy_demo/agent/tools/memory.py) (tools), [src/reachy_demo/agent/memory_eval.py](../../src/reachy_demo/agent/memory_eval.py) (eval).

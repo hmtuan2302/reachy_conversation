@@ -101,3 +101,129 @@ def test_reset_missing_db_is_fine(tmp_path: Path) -> None:
     from reachy_demo.agent.memory_eval import reset
 
     assert reset(tmp_path / "none.db", everything=False, yes=True) == 0
+
+
+def _embed_args(db: Path) -> Any:
+    import argparse
+
+    return argparse.Namespace(memory_command="embed", db=str(db))
+
+
+def test_memory_embed_command_counts(tmp_path: Path, monkeypatch: Any, capsys: Any) -> None:
+    from reachy_demo.agent import memory_eval
+    from reachy_demo.memory.store import OWNER_ID, MemoryStore
+    from tests.unit.fake_embedder import FakeEmbedder
+
+    db = tmp_path / "m.db"
+    s = MemoryStore(db, lambda: 0.0)
+    for i in range(3):
+        s.add_fact(subject_person_id=OWNER_ID, subject_text="Tuan", text=f"fact {i}")
+    s.close()
+    monkeypatch.setattr(memory_eval, "load_dotenv", lambda *_a: False)
+    monkeypatch.setattr(memory_eval, "load_embedder", lambda _env: (FakeEmbedder(), "hybrid"))
+    assert memory_eval.run(_embed_args(db)) == 0
+    assert "memory embed: 3 facts, 0 episodes (fake@256)" in capsys.readouterr().out
+
+
+def test_memory_embed_without_embedder_returns_2(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    from reachy_demo.agent import memory_eval
+
+    monkeypatch.setattr(memory_eval, "load_dotenv", lambda *_a: False)
+    monkeypatch.setattr(
+        memory_eval, "load_embedder", lambda _env: (None, "keywords only (EMBED=off)")
+    )
+    assert memory_eval.run(_embed_args(tmp_path / "m.db")) == 2
+    assert "EMBED=off" in capsys.readouterr().err
+
+
+def _eval_args(tmp_path: Path, baseline: bool = False) -> Any:
+    import argparse
+
+    f = tmp_path / "s.jsonl"
+    f.write_text('{"say": "hi"}\n')
+    return argparse.Namespace(memory_command="eval", file=str(f), baseline=baseline)
+
+
+def _no_network(monkeypatch: Any) -> list[Any]:
+    from reachy_demo.agent import memory_eval
+
+    seen: list[Any] = []
+
+    async def fake_evaluate(*a: Any, **kw: Any) -> Any:
+        seen.append(kw.get("embedder"))
+        return memory_eval.Report()
+
+    monkeypatch.setattr(memory_eval, "load_dotenv", lambda *_a: False)
+    monkeypatch.setattr(memory_eval, "evaluate", fake_evaluate)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    return seen
+
+
+def test_eval_needs_embedder_unless_embed_off(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    from reachy_demo.agent import memory_eval
+
+    _no_network(monkeypatch)
+    monkeypatch.delenv("EMBED", raising=False)
+    monkeypatch.setattr(
+        memory_eval, "load_embedder",
+        lambda _env: (None, "keywords only (install: uv sync --extra embed)"),
+    )  # fmt: skip
+    assert memory_eval.run(_eval_args(tmp_path)) == 2
+    assert "uv sync --extra embed" in capsys.readouterr().err
+    monkeypatch.setenv("EMBED", "off")
+    monkeypatch.setattr(
+        memory_eval, "load_embedder", lambda _env: (None, "keywords only (EMBED=off)")
+    )
+    assert memory_eval.run(_eval_args(tmp_path)) == 0
+
+
+def test_baseline_runs_without_embedder(tmp_path: Path, monkeypatch: Any) -> None:
+    from reachy_demo.agent import memory_eval
+
+    seen = _no_network(monkeypatch)
+
+    def never(_env: Any) -> Any:
+        raise AssertionError("baseline must not load the embedder")
+
+    monkeypatch.setattr(memory_eval, "load_embedder", never)
+    assert memory_eval.run(_eval_args(tmp_path, baseline=True)) == 0
+    assert seen == [None]
+
+
+def test_report_prints_embed_timing() -> None:
+    from reachy_demo.agent.memory_eval import Report
+
+    lines = Report(embed_ms=[10.0, 20.0, 30.0]).lines()
+    assert any(line.startswith("query embed ms") and "p50 20.0" in line for line in lines)
+
+
+async def test_memory_run_with_embedder_times_queries(tmp_path: Path) -> None:
+    from tests.unit.fake_embedder import FakeEmbedder
+
+    report = await evaluate(
+        STEPS, _agent_chat, _memory_chat, tmp_path / "e.db", embedder=FakeEmbedder()
+    )
+    assert report.results["cross"] == [True] and report.embed_ms
+
+
+def test_score_expect_absent() -> None:
+    step = {"expect_absent": ["Mai", "sister"]}
+    assert score("Sounds fun, enjoy the match!", step)
+    assert not score("Your sister Mai would like that", step)
+    assert score("The main idea is in this email", step)  # whole words only
+    both = {"expect": ["Arsenal"], "expect_absent": ["Copilot"]}
+    assert score("Arsenal again?", both) and not score("Arsenal and Copilot", both)
+
+
+async def test_memory_run_with_embedder_times_push(tmp_path: Path) -> None:
+    from tests.unit.fake_embedder import FakeEmbedder
+
+    report = await evaluate(
+        STEPS, _agent_chat, _memory_chat, tmp_path / "e.db", embedder=FakeEmbedder()
+    )
+    assert report.push_ms
+    assert any(line.startswith("push ms") for line in report.lines())

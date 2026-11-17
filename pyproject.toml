@@ -20,6 +20,10 @@ perception = ["mediapipe>=0.10", "opencv-python-headless>=4.10"]
 speaker = ["sherpa-onnx>=1.10"]          # speaker-embedding gate
 mic = ["sounddevice>=0.5"]
 vieneu = ["vieneu>=3.7"]                 # local VieNeu-TTS v3 Turbo (TTS_PROVIDER=vieneu)
+embed = [
+    "huggingface-hub>=0.25",
+    "tokenizers>=0.20",
+]
 
 [project.scripts]
 reachy-demo = "reachy_demo.__main__:main"

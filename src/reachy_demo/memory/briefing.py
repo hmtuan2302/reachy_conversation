@@ -6,11 +6,13 @@ Blocks and order: docs/superpowers/specs/2026-11-17-memory-design.md §7.3.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import datetime, tzinfo
 
 from reachy_demo.memory.store import Fact, MemoryStore, Speaker
+from reachy_demo.ops.tokens import est_tokens
 
-CAP_CHARS = 2400  # ~600 tokens at ~4 chars per token
+DEFAULT_MEMORY_TOKENS = 600
 MIN_FACTS = 5
 EPISODE_CHARS = 240  # ~60 tokens per conversation summary
 RULE = (
@@ -49,9 +51,32 @@ def fact_line(f: Fact, now: float) -> str:
     return f"- {f.text} ({f.source}, {ago(now - f.created)})"
 
 
+@dataclass(frozen=True)
+class Briefing:
+    text: str
+    fact_ids: frozenset[int]  # shown in the block, so the per-turn push skips them
+    episode_ids: frozenset[int]
+
+
 def build_briefing(
-    store: MemoryStore, speaker: Speaker, now: float, tz: tzinfo | None = None
+    store: MemoryStore,
+    speaker: Speaker,
+    now: float,
+    tz: tzinfo | None = None,
+    *,
+    cap_tokens: int = DEFAULT_MEMORY_TOKENS,
 ) -> str:
+    return build_briefing_parts(store, speaker, now, tz, cap_tokens=cap_tokens).text
+
+
+def build_briefing_parts(
+    store: MemoryStore,
+    speaker: Speaker,
+    now: float,
+    tz: tzinfo | None = None,
+    *,
+    cap_tokens: int = DEFAULT_MEMORY_TOKENS,
+) -> Briefing:
     def when(t: float, fmt: str) -> str:
         return datetime.fromtimestamp(t, tz).strftime(fmt)
 
@@ -82,9 +107,9 @@ def build_briefing(
         f"- {fu.text}" + (f" (due {when(fu.due, '%a %d %b')})" if fu.due else "")
         for fu in store.open_follow_ups(speaker.person_id, now)
     ]
+    recent = store.recent_episodes(speaker.person_id, 5)
     episodes = [
-        f"- {when(e.start, '%a %d %b %H:%M')}: {_cut(e.summary, EPISODE_CHARS)}"
-        for e in store.recent_episodes(speaker.person_id, 5)
+        f"- {when(e.start, '%a %d %b %H:%M')}: {_cut(e.summary, EPISODE_CHARS)}" for e in recent
     ]
 
     def render() -> str:
@@ -101,13 +126,14 @@ def build_briefing(
         return "\n".join(parts)
 
     text = render()
-    while len(text) > CAP_CHARS and len(facts) > MIN_FACTS:
+    while est_tokens(text) > cap_tokens and len(facts) > MIN_FACTS:
         facts.pop()
         text = render()
-    while len(text) > CAP_CHARS and follow_ups:
+    while est_tokens(text) > cap_tokens and follow_ups:
         follow_ups.pop()
         text = render()
-    return text
+    shown = frozenset(f.id for f in [*prefs, *facts])
+    return Briefing(text, shown, frozenset(e.id for e in recent))
 
 
 def _cut(s: str, n: int) -> str:

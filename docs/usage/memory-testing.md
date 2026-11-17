@@ -8,13 +8,17 @@ Run from the repo folder:
 
 ```bash
 export MEMORY_DB=data/memory-test.db
+export CONTEXT_DEBUG=on   # print the [memory] block, related memories and recall results before each answer
 alias run='uv run reachy-demo agent --type --no-speak'
 
 # Look inside the memory database
-facts() { sqlite3 -header -column "$MEMORY_DB" "select id, text, category, sensitive, expired is not null as old from facts"; }
+# facts() { sqlite3 -header -column "$MEMORY_DB" "select id, text, category, sensitive, expired is not null as old from facts"; }
+facts() { sqlite3 -header -column "$MEMORY_DB" "select * from facts"; }
 eps()   { sqlite3 -header -column "$MEMORY_DB" "select session_id, datetime(start, 'unixepoch', 'localtime') as start, importance, summary from episodes"; }
 fus()   { sqlite3 -header -column "$MEMORY_DB" "select id, text, datetime(due, 'unixepoch', 'localtime') as due, done is not null as done from follow_ups"; }
 who()   { sqlite3 -header -column "$MEMORY_DB" "select id, role, name, aliases_json as earlier_names, description from people"; }
+vecs()  { sqlite3 -header -column "$MEMORY_DB" "select 'fact' as kind, model, count(*) as n from fact_vecs group by model union all select 'episode', model, count(*) from episode_vecs group by model"; }
+novec() { sqlite3 -header -column "$MEMORY_DB" "select id, text from facts where expired is null and id not in (select fact_id from fact_vecs)"; }
 ```
 
 | Helper | Shows | Columns to watch |
@@ -23,6 +27,8 @@ who()   { sqlite3 -header -column "$MEMORY_DB" "select id, role, name, aliases_j
 | `facts` | Stored facts | `old = 1`: replaced by a newer fact. `sensitive = 1`: kept out of the prompt |
 | `eps` | One summary per conversation | `importance = 0`: small talk only, not shown to the robot |
 | `fus` | Follow-ups ("Ask how the exam went") | `done = 1`: asked or answered in a turn (your words or Reachy's reply), won't be brought up again |
+| `vecs` | How many memories have a vector, per model | Should match the number of current facts and conversations a few seconds after a turn (or after `memory embed`) |
+| `novec` | Current facts still without a vector | Empty once the background backfill is done; a fact stays here if embedding failed (search by keywords still finds it) |
 
 `sqlite3` reads double quotes as column names, so the times use single quotes (`'unixepoch'`). That's why these are shell functions and not aliases. Wait 2–3 seconds after a turn before you check, because memory is written in the background.
 
@@ -115,14 +121,42 @@ If you've typed text without pressing Enter, the first Ctrl-D only sends that te
 
 **Guests.** A guest's own statements go to facts under the guest, and nothing changes your facts or description. There's no speaker ID yet, so everyone counts as you and this can't be tested by hand. It's covered by a unit test: `uv run pytest tests/unit/test_consolidate.py -k guest`.
 
+## G. Search by meaning
+
+Needs the [setup](memory.md#first-time-setup-search-by-meaning). Check the start line says `(memory search: hybrid (embeddinggemma-300m))`.
+
+| # | Do | Expect |
+|---|---|---|
+| 30 | `run`: "I'm allergic to shrimp." Then tell it 12+ other facts (hobbies, job, friends), quit, `run` again: "Is there any seafood I can't eat?" | "Shrimp". The question shares no word with the fact, and with many facts it isn't in the `[memory]` block, so only the vector search finds it. `vecs` shows one vector per fact |
+| 31 | `run`: "I write code with GitHub Copilot every day." Quit, `run`: "I switched to Claude for programming." Then `facts` | The Copilot fact has `old = 1`, replaced by the Claude fact. Before vectors, both stayed current because they share no words |
+| 32 | Ask in Vietnamese about an English fact: "Tôi có sợ cái gì không?" after "I'm afraid of heights" | "Độ cao" / heights: the search works across languages |
+| 33 | Set `EMBED=off` in `.env`, `run`, repeat 30 | The start line says `keywords only (EMBED=off)`, and case 30 likely gets "I don't remember". Nothing else breaks |
+| 34 | `uv run reachy-demo memory embed` | Prints `memory embed: N facts, M episodes (...)`; run it again and both are 0 |
+| 35 | After case 30's facts, `run`: "I'm thinking about cooking seafood for dinner tonight." | Reachy mentions the shrimp allergy without being asked. Start line shows `(memory push: on)` |
+| 36 | `run`: "What's 17 times 23?" | Just the answer: no unrelated memory (Mai, Bin, shrimp…) comes up |
+| 37 | Set `MEMORY_PUSH=off`, repeat 35 | The start line says `memory push: off: MEMORY_PUSH=off`; Reachy likely doesn't mention the allergy, but "Is there any seafood I can't eat?" still works through `recall` |
+
 ## F. Automatic
 
 Days-apart questions ("yesterday", "last Tuesday") are slow to test by hand. The scripted eval runs them on a simulated clock (about 1.5 min, real DeepSeek calls):
 
 ```bash
-uv run reachy-demo memory eval              # memory on
+uv run reachy-demo memory eval              # memory on, search by meaning (needs the embed setup)
+EMBED=off uv run reachy-demo memory eval    # memory on, keyword search only: compare with the line above
 uv run reachy-demo memory eval --baseline   # memory off, whole history in context
 ```
+
+The memory run prints `query embed ms p50 … p95 …` (one embedding) and `push ms p50 … p95 …` (the whole related-memories step per turn, which waits before the answer).
+
+Categories `proactive` and `noise` test related memories. `proactive`: a plain remark where the answer should bring up a stored memory (`expect`). `noise`: an unrelated question whose answer must not mention any listed memory, scored with `expect_absent` (whole words, case and accents ignored):
+
+```
+{"ask": "What's 17 times 23?", "expect_absent": ["Mai", "Bin", "shrimp"], "category": "noise"}
+```
+
+To tune the threshold `PUSH_MIN_SIM` (in `src/reachy_demo/memory/related.py`, default 0.55): if `noise` fails, raise it by 0.05; if `proactive` fails and `noise` passes, lower it by 0.05. Rerun the eval after each change; one run is noisy.
+
+ Categories `paraphrase` (no shared words with the stored fact, VN and EN) and `invalidate` (a changed value must win) test search by meaning; compare them between the two memory runs.
 
 Add your own cases to `tests/replay/memory_eval.jsonl` ([format](memory.md#testing-memory-memory-eval)).
 
@@ -132,4 +166,6 @@ Add your own cases to `tests/replay/memory_eval.jsonl` ([format](memory.md#testi
 - **Case 25:** a pet or plan sentence the extractor labels `bio` would rewrite the description. It still shouldn't change the meaning.
 - **Case 9c:** if Reachy's reply happens to share 2 topic words with the follow-up, the word fallback closes it.
 - **Case 8:** whether Reachy opens with the exam is up to the LLM, so it may not happen every time.
+- **Case 30:** if the fact is still in the `[memory]` block (too few other facts), it passes without vectors. Add more facts first.
+- **Case 31:** the DECIDE LLM can still pick ADD over INVALIDATE even when the old fact is shown to it.
 - **Case 21:** with laptop speakers, Reachy can hear its own answers, and they get stored as your turns. Use a headset.

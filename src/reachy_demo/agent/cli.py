@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import json
 import os
 import sys
 import threading
@@ -33,9 +34,13 @@ from reachy_demo.agent.tools import memory as memory_tools
 from reachy_demo.agent.tools import voice as voice_tools
 from reachy_demo.audio.player import PlayerError
 from reachy_demo.audio.vad import EnergyVAD
+from reachy_demo.memory.briefing import DEFAULT_MEMORY_TOKENS
 from reachy_demo.memory.consolidate import Consolidator
+from reachy_demo.memory.embed import load_embedder
 from reachy_demo.memory.session import MemorySession
 from reachy_demo.memory.store import OWNER, MemoryStore
+from reachy_demo.memory.vectors import VectorIndex
+from reachy_demo.ops.tokens import est_tokens
 from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
 from reachy_demo.robot.adapter import connect_robot
 from reachy_demo.robot.dances import load_dances
@@ -224,6 +229,17 @@ def run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    context_max = _positive_int("CONTEXT_MAX_TOKENS", DEFAULT_CONTEXT_TOKENS)
+    memory_max = _positive_int("MEMORY_MAX_TOKENS", DEFAULT_MEMORY_TOKENS)
+    if context_max is None or memory_max is None:
+        return 2
+    if memory_max >= context_max:
+        print(
+            "config error: MEMORY_MAX_TOKENS must be below CONTEXT_MAX_TOKENS, "
+            f"got {memory_max} and {context_max}",
+            file=sys.stderr,
+        )
+        return 2
     # HF_TOKEN: speech-to-text, and the camera's vision model when it runs on the HF server.
     needs_hf = not args.type or (args.robot and vision == "hf")
     needed = (["HF_TOKEN"] if needs_hf else []) + ["DEEPSEEK_API_KEY"]
@@ -275,7 +291,10 @@ def run(args: argparse.Namespace) -> int:
             base_url=base_url,
         ),
     )
-    memory = memory_from_env(keys["DEEPSEEK_API_KEY"], base_url)
+    memory = memory_from_env(keys["DEEPSEEK_API_KEY"], base_url, memory_max)
+    push, push_line = push_status(memory)
+    if memory:
+        print(f"  (memory push: {push_line})")
     sets: list[ToolSet] = []
     prompt = SYSTEM_PROMPT
     if memory:
@@ -292,14 +311,34 @@ def run(args: argparse.Namespace) -> int:
         )
         prompt += f" {voice_tools.PROMPT}"
 
-    def make_agent(sets: list[ToolSet], prompt: str) -> Agent:
+    def make_agent(sets: list[ToolSet], prompt: str) -> Agent | None:
         tools = Toolbox(*sets) if sets else None
+        budget = context_max - (
+            est_tokens(json.dumps(tools.specs(), ensure_ascii=False)) if tools else 0
+        )
+        if push and budget - PUSH_RESERVE_TOKENS <= memory_max:
+            print(
+                f"config error: related memories (MEMORY_PUSH) need ~{PUSH_RESERVE_TOKENS} more "
+                f"tokens: raise CONTEXT_MAX_TOKENS={context_max} or set MEMORY_PUSH=off",
+                file=sys.stderr,
+            )
+            return None
+        if budget <= memory_max:
+            print(
+                f"config error: tool specs (~{context_max - budget} tokens) leave no room "
+                f"in CONTEXT_MAX_TOKENS={context_max}",
+                file=sys.stderr,
+            )
+            return None
         agent = Agent(
             partial(llm, model=model, tools=tools.specs()) if tools else partial(llm, model=model),
             system_prompt=prompt,
             tools=tools,
             context=memory[0].context if memory else None,
             on_turn=memory[0].submit if memory else None,
+            max_tokens=budget,
+            related=memory[0].related if push and memory else None,
+            debug=show_context if _on("CONTEXT_DEBUG") else None,
         )
         if memory:
             agent.preload(memory[0].preload())
@@ -324,6 +363,8 @@ def run(args: argparse.Namespace) -> int:
             else:
                 print("  (no camera: the robot can move but not see)")
             agent = make_agent(sets, prompt)
+            if agent is None:
+                return 2
             main = converse(
                 turns,
                 agent,
@@ -336,6 +377,8 @@ def run(args: argparse.Namespace) -> int:
             code = run_until_done(_with_memory(_then_close(main, head_tools), memory))
         else:
             agent = make_agent(sets, prompt)
+            if agent is None:
+                return 2
             main = converse(turns, agent, sys.stdout, speak, stop)
             code = run_until_done(_with_memory(main, memory))
     save_recording(args, rec)
@@ -343,10 +386,49 @@ def run(args: argparse.Namespace) -> int:
 
 
 VISION_PROVIDERS = ("hf", "deepseek")
+DEFAULT_CONTEXT_TOKENS = 8000
+PUSH_RESERVE_TOKENS = 200  # up to 3 related-memory lines of 240 chars, sent with the user turn
+
+
+def _on(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "on", "true", "yes")
+
+
+def show_context(kind: str, text: str) -> None:
+    """CONTEXT_DEBUG: print what the model is given, then reopen the "bot: " line."""
+    body = "\n".join(f"  │ {line}" for line in text.splitlines())
+    sys.stdout.write(f"\n  ┌ {kind}\n{body}\n  └\nbot: ")
+    sys.stdout.flush()
+
+
+def push_status(memory: tuple[MemorySession, object] | None) -> tuple[bool, str]:
+    """Whether the per-turn related-memories push runs, and why not."""
+    if os.environ.get("MEMORY_PUSH", "").strip().lower() in ("off", "0", "false", "no"):
+        return False, "off: MEMORY_PUSH=off"
+    if memory is None:
+        return False, "off: memory is off"
+    if not memory[0].has_vectors:
+        return False, "off: no embedding model"
+    return True, "on"
+
+
+def _positive_int(name: str, default: int) -> int | None:
+    """An env int > 0, or None after printing a config error."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        print(f"config error: {name} must be a positive integer, got {raw!r}", file=sys.stderr)
+        return None
+    return value
 
 
 def memory_from_env(
-    api_key: str, base_url: str
+    api_key: str, base_url: str, memory_max_tokens: int = DEFAULT_MEMORY_TOKENS
 ) -> tuple[MemorySession, memory_tools.MemoryTools] | None:
     """Memory (MEMORY_DB, MEMORY_MODEL), or None when MEMORY=off or the DB can't be opened."""
     if os.environ.get("MEMORY", "").strip().lower() in ("off", "0", "false", "no"):
@@ -364,10 +446,25 @@ def memory_from_env(
         model=os.environ.get("MEMORY_MODEL", "").strip() or DEFAULT_MODEL,
         base_url=base_url,
     )
-    consolidator = Consolidator(store, chat, time.time)
-    session = MemorySession(store, consolidator, chat, clock=time.time)
+    print("  (memory search: loading the embedding model...)", flush=True)
+    embedder, status = load_embedder(os.environ)
+    index = VectorIndex.load(store, embedder.model) if embedder else None
+    print(f"  (memory search: {status})")
+    consolidator = Consolidator(store, chat, time.time, embedder=embedder, index=index)
+    session = MemorySession(
+        store,
+        consolidator,
+        chat,
+        clock=time.time,
+        memory_max_tokens=memory_max_tokens,
+        embedder=embedder,
+        index=index,
+    )
     print(f"  (memory on: {path})")
-    return session, memory_tools.MemoryTools(store, consolidator, speaker=lambda: OWNER)
+    tools = memory_tools.MemoryTools(
+        store, consolidator, speaker=lambda: OWNER, embedder=embedder, index=index
+    )
+    return session, tools
 
 
 async def _with_memory(main: Awaitable[None], memory: tuple[MemorySession, object] | None) -> None:

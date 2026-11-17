@@ -125,3 +125,54 @@ def test_limit_is_clamped() -> None:
     for i in range(15):
         _fact(s, f"Tuan visited city number{i} with the dog.")
     assert len(recall(s, OWNER, "dog", limit=100, now=NOW)["results"]) == 10
+
+
+# -- hybrid (vectors) ------------------------------------------------------------------------
+
+from reachy_demo.memory.vectors import VectorIndex  # noqa: E402
+from tests.unit.fake_embedder import FakeEmbedder  # noqa: E402
+
+AI = FakeEmbedder({"copilot": "aitool", "claude": "aitool", "tool": "aitool", "ai": "aitool"})
+
+
+def _indexed(s: MemoryStore, *ids: int) -> VectorIndex:
+    idx = VectorIndex(AI.model)
+    for i in ids:
+        f = s.fact(i)
+        assert f is not None
+        idx.put("fact", i, AI.embed([f.text], "doc")[0])
+    return idx
+
+
+def _q(text: str):  # type: ignore[no-untyped-def]
+    return AI.embed([text], "query")[0]
+
+
+def test_recall_finds_paraphrase_without_shared_words() -> None:
+    s, _ = _store()
+    fid = _fact(s, "Tuan codes with Claude.")
+    q = "which AI tool"
+    r = recall(s, OWNER, q, now=NOW, index=_indexed(s, fid), query_vec=_q(q))
+    assert r["found"] and "Claude" in r["results"][0]
+    assert recall(s, OWNER, q, now=NOW)["found"] is False  # keywords alone miss it
+
+
+def test_recall_vector_path_respects_guest_scope() -> None:
+    s, _ = _store()
+    s._db.execute("INSERT INTO people(id, role) VALUES (2, 'guest')")
+    fid = _fact(s, "Tuan codes with Claude.")
+    guest = Speaker(2, "guest")
+    r = recall(s, guest, "AI tool", now=NOW, index=_indexed(s, fid), query_vec=_q("AI tool"))
+    assert r == {"found": False}
+
+
+def test_recall_time_window_returns_expired_by_vector() -> None:
+    s, c = _store()
+    c.t = NOW.timestamp() - 10 * DAY
+    old = _fact(s, "Tuan uses Copilot.")
+    c.t = NOW.timestamp()
+    new = _fact(s, "Tuan uses Claude.")
+    s.invalidate_fact(old, valid_to=None, replaced_by=new)
+    idx = _indexed(s, old, new)
+    r = recall(s, OWNER, "AI tool", now=NOW, when="last week", index=idx, query_vec=_q("AI tool"))
+    assert any("Copilot" in line and "no longer true" in line for line in r["results"])

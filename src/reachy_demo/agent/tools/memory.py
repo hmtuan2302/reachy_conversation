@@ -16,6 +16,7 @@ from typing import Any
 from reachy_demo.memory.consolidate import Consolidator
 from reachy_demo.memory.recall import recall
 from reachy_demo.memory.store import MemoryStore, Speaker
+from reachy_demo.memory.vectors import Embedder, VectorIndex, embed_one
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +50,8 @@ SPECS = [
     _fn(
         "recall",
         "Search your long-term memory about people, what they told you and past conversations. "
-        "Write query as English keywords. Use it before saying you don't know something personal.",
+        "Write query as English keywords. Use it before saying you don't know something personal. "
+        "Write a standalone query (no pronouns). For several topics, call recall once per topic.",
         {
             "query": {"type": "string", "description": "English keywords, e.g. 'sister name'"},
             "person": {"type": "string", "description": "'me' for the speaker, or a name"},
@@ -93,11 +95,15 @@ class MemoryTools:
         *,
         speaker: Callable[[], Speaker],
         now: Callable[[], datetime] = lambda: datetime.now().astimezone(),
+        embedder: Embedder | None = None,
+        index: VectorIndex | None = None,
     ) -> None:
         self._store = store
         self._consolidator = consolidator
         self._speaker = speaker
         self._now = now
+        self._embedder = embedder
+        self._index = index
         self._pending: set[asyncio.Task[Any]] = set()  # slow remembers finishing in background
 
     def specs(self) -> list[dict[str, Any]]:
@@ -116,7 +122,7 @@ class MemoryTools:
         speaker = self._speaker()
         try:
             if name == "recall":
-                return self._recall(speaker, args)
+                return await self._recall(speaker, args)
             if speaker.role != "owner":
                 return NOT_OWNER
             if name == "remember":
@@ -128,10 +134,11 @@ class MemoryTools:
             return {"error": "internal"}
         return {"error": f"unknown_tool: {name}"}
 
-    def _recall(self, speaker: Speaker, args: dict[str, Any]) -> dict[str, Any]:
+    async def _recall(self, speaker: Speaker, args: dict[str, Any]) -> dict[str, Any]:
         query = args.get("query")
         if not isinstance(query, str):
             return {"error": "bad_arguments: query must be a string"}
+        vec = await embed_one(self._embedder, query, "query") if self._index else None
         limit = args.get("limit", 5)
         return recall(
             self._store,
@@ -142,6 +149,8 @@ class MemoryTools:
             kind=_str(args.get("kind")) or "any",
             when=_str(args.get("when")),
             limit=limit if isinstance(limit, int) else 5,
+            index=self._index,
+            query_vec=vec,
         )
 
     async def _remember(self, speaker: Speaker, args: dict[str, Any]) -> dict[str, Any]:

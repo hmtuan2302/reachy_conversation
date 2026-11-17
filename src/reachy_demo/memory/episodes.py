@@ -9,6 +9,7 @@ from datetime import datetime
 from reachy_demo.memory.consolidate import parse_date, worth_keeping
 from reachy_demo.memory.prompts import SUMMARIZE, ChatFn, ask_json
 from reachy_demo.memory.store import Clock, MemoryStore
+from reachy_demo.memory.vectors import Embedder, VectorIndex, store_vec
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +25,8 @@ async def summarize_session(
     clock: Clock,
     *,
     timeout_s: float = 10.0,
+    embedder: Embedder | None = None,
+    index: VectorIndex | None = None,
 ) -> int | None:
     """Write the session's episode once (idempotent). Returns its id, or None if nothing written."""
     turns = store.session_turns(session_id)[-MAX_TURNS:]
@@ -57,6 +60,7 @@ async def summarize_session(
         store, session_id, start, end, person_id, summary.strip(), topics, importance
     )
     if episode_id is not None:
+        await store_vec(store, index, embedder, "episode", episode_id, summary.strip())
         for fu in data.get("follow_ups") or []:
             if isinstance(fu, dict) and isinstance(fu.get("text"), str) and fu["text"].strip():
                 store.add_follow_up(

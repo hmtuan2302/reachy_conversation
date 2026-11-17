@@ -38,3 +38,59 @@
 {"restart": true}
 {"t": "2026-11-12T21:00:00+07:00", "ask": "What kind of person am I?", "expect": ["calm", "introvert", "night owl", "điềm tĩnh", "hướng nội"], "category": "description"}
 {"t": "2026-11-12T21:01:00+07:00", "ask": "What do I like to drink these days?", "expect": ["tea", "trà"], "category": "description"}
+{"restart": true}
+{"t": "2026-11-13T20:00:00+07:00", "say": "I'm allergic to shrimp, it makes my throat swell."}
+{"t": "2026-11-13T20:01:00+07:00", "say": "On weekends I play the guitar for fun."}
+{"t": "2026-11-13T20:02:00+07:00", "say": "My birthday is on March 3rd."}
+{"t": "2026-11-13T20:03:00+07:00", "say": "I'm reading Sapiens by Yuval Harari right now."}
+{"t": "2026-11-13T20:04:00+07:00", "say": "Tôi sợ độ cao lắm."}
+{"t": "2026-11-13T20:05:00+07:00", "say": "Sáng chủ nhật nào tôi cũng đi bơi."}
+{"t": "2026-11-13T20:06:00+07:00", "say": "Tôi đang học tiếng Nhật để đi du lịch Tokyo."}
+{"t": "2026-11-13T20:07:00+07:00", "say": "My best friend is Khoa, we met at university."}
+{"t": "2026-11-13T20:08:00+07:00", "say": "Khoa works at a bakery in District 1."}
+{"t": "2026-11-13T20:09:00+07:00", "say": "Mai studies medicine at the university in Saigon."}
+{"t": "2026-11-13T20:10:00+07:00", "say": "Bin was a present from my dad when I graduated."}
+{"t": "2026-11-13T20:11:00+07:00", "say": "I write code with GitHub Copilot every day at work."}
+{"t": "2026-11-13T20:12:00+07:00", "say": "I train at the California Fitness gym after work."}
+{"t": "2026-11-13T20:13:00+07:00", "say": "I work as a backend developer at FPT."}
+{"t": "2026-11-13T20:14:00+07:00", "say": "Tôi đi làm bằng xe máy."}
+{"t": "2026-11-13T20:15:00+07:00", "say": "I support Arsenal and watch every match."}
+{"t": "2026-11-13T20:16:00+07:00", "say": "I can't stand horror movies."}
+{"restart": true}
+{"t": "2026-11-14T20:00:00+07:00", "say": "I switched to Claude for programming, it's much better."}
+{"t": "2026-11-14T20:01:00+07:00", "say": "I quit the gym, now I just go running in the park."}
+{"t": "2026-11-14T20:02:00+07:00", "say": "I joined VNG as a data engineer this week."}
+{"t": "2026-11-14T20:03:00+07:00", "say": "Giờ tôi đi làm bằng xe buýt cho đỡ mệt."}
+{"restart": true}
+{"t": "2026-11-16T20:00:00+07:00", "ask": "Is there any seafood I can't eat?", "expect": ["shrimp", "tôm"], "category": "paraphrase"}
+{"t": "2026-11-16T20:01:00+07:00", "ask": "What instrument do I play?", "expect": ["guitar", "đàn"], "category": "paraphrase"}
+{"t": "2026-11-16T20:02:00+07:00", "ask": "When was I born?", "expect": ["March 3", "3rd of March", "3 March", "3/3", "3 tháng 3", "mùng 3"], "category": "paraphrase"}
+{"t": "2026-11-16T20:03:00+07:00", "ask": "Which novel am I in the middle of?", "expect": ["Sapiens"], "category": "paraphrase"}
+{"t": "2026-11-16T20:04:00+07:00", "ask": "Tôi có sợ cái gì không?", "expect": ["heights", "độ cao"], "category": "paraphrase"}
+{"t": "2026-11-16T20:05:00+07:00", "ask": "Sáng chủ nhật tôi thường làm gì?", "expect": ["swim", "bơi"], "category": "paraphrase"}
+{"t": "2026-11-16T20:06:00+07:00", "ask": "Tôi đang học ngoại ngữ nào?", "expect": ["Japanese", "tiếng Nhật", "Nhật"], "category": "paraphrase"}
+{"t": "2026-11-16T20:07:00+07:00", "ask": "Ai là người thân thiết nhất với tôi ngoài gia đình?", "expect": ["Khoa"], "category": "paraphrase"}
+{"t": "2026-11-16T20:08:00+07:00", "ask": "Which AI assistant do I use when I code?", "expect": ["Claude"], "category": "invalidate"}
+{"t": "2026-11-16T20:09:00+07:00", "ask": "Where do I exercise these days?", "expect": ["park", "running", "run", "công viên", "chạy"], "category": "invalidate"}
+{"t": "2026-11-16T20:10:00+07:00", "ask": "Which company am I at?", "expect": ["VNG"], "category": "invalidate"}
+{"t": "2026-11-16T20:11:00+07:00", "ask": "How do I get to the office?", "expect": ["bus", "xe buýt"], "category": "invalidate"}
+{"t": "2026-11-16T20:12:00+07:00", "ask": "Where does my best friend work?", "expect": ["bakery", "tiệm bánh"], "category": "multihop"}
+{"t": "2026-11-16T20:13:00+07:00", "ask": "What does the person I'm travelling to Da Lat with study?", "expect": ["medicine", "y khoa", "ngành y", "học y"], "category": "multihop"}
+{"t": "2026-11-16T20:14:00+07:00", "ask": "Who gave me my corgi?", "expect": ["dad", "father", "bố"], "category": "multihop"}
+{"restart": true}
+{"t": "2026-11-17T20:00:00+07:00", "ask": "I'm thinking about cooking seafood for dinner tonight.", "expect": ["shrimp", "tôm", "allerg", "dị ứng"], "category": "proactive"}
+{"t": "2026-11-17T20:01:00+07:00", "ask": "I have a free Sunday morning, not sure what to do.", "expect": ["swim", "bơi", "guitar", "run", "chạy"], "category": "proactive"}
+{"t": "2026-11-17T20:02:00+07:00", "ask": "I'm flying to Tokyo next spring!", "expect": ["Japanese", "tiếng Nhật", "Nhật"], "category": "proactive"}
+{"t": "2026-11-17T20:03:00+07:00", "ask": "There's a big Premier League match this weekend.", "expect": ["Arsenal"], "category": "proactive"}
+{"t": "2026-11-17T20:04:00+07:00", "ask": "I want to buy a birthday gift for my best friend.", "expect": ["Khoa", "bakery", "tiệm bánh"], "category": "proactive"}
+{"t": "2026-11-17T20:05:00+07:00", "ask": "Tối nay tôi muốn xem một bộ phim.", "expect": ["horror", "kinh dị"], "category": "proactive"}
+{"t": "2026-11-17T20:06:00+07:00", "ask": "My code keeps crashing today, so annoying.", "expect": ["Claude"], "category": "proactive"}
+{"t": "2026-11-17T20:07:00+07:00", "ask": "I'm packing for the mountains in December.", "expect": ["Da Lat", "Đà Lạt", "Mai"], "category": "proactive"}
+{"t": "2026-11-17T20:08:00+07:00", "ask": "What's the capital of Australia?", "expect_absent": ["Mai", "Bin", "shrimp", "tôm", "Arsenal", "Khoa", "Claude", "Copilot", "guitar", "Sapiens", "corgi", "Da Lat", "Đà Lạt", "VNG"], "category": "noise"}
+{"t": "2026-11-17T20:09:00+07:00", "ask": "Can you explain how rainbows form?", "expect_absent": ["Mai", "Bin", "shrimp", "tôm", "Arsenal", "Khoa", "Claude", "Copilot", "guitar", "Sapiens", "corgi", "Da Lat", "Đà Lạt", "VNG"], "category": "noise"}
+{"t": "2026-11-17T20:10:00+07:00", "ask": "Tell me a short joke.", "expect_absent": ["Mai", "Bin", "shrimp", "tôm", "Arsenal", "Khoa", "Claude", "Copilot", "guitar", "Sapiens", "corgi", "Da Lat", "Đà Lạt", "VNG"], "category": "noise"}
+{"t": "2026-11-17T20:11:00+07:00", "ask": "How many minutes are in a day?", "expect_absent": ["Mai", "Bin", "shrimp", "tôm", "Arsenal", "Khoa", "Claude", "Copilot", "guitar", "Sapiens", "corgi", "Da Lat", "Đà Lạt", "VNG"], "category": "noise"}
+{"t": "2026-11-17T20:12:00+07:00", "ask": "Thời tiết ở Huế mùa này thế nào?", "expect_absent": ["Mai", "Bin", "shrimp", "tôm", "Arsenal", "Khoa", "Claude", "Copilot", "guitar", "Sapiens", "corgi", "Da Lat", "Đà Lạt", "VNG"], "category": "noise"}
+{"t": "2026-11-17T20:13:00+07:00", "ask": "Translate 'good morning' into French.", "expect_absent": ["Mai", "Bin", "shrimp", "tôm", "Arsenal", "Khoa", "Claude", "Copilot", "guitar", "Sapiens", "corgi", "Da Lat", "Đà Lạt", "VNG"], "category": "noise"}
+{"t": "2026-11-17T20:14:00+07:00", "ask": "What's 17 times 23?", "expect_absent": ["Mai", "Bin", "shrimp", "tôm", "Arsenal", "Khoa", "Claude", "Copilot", "guitar", "Sapiens", "corgi", "Da Lat", "Đà Lạt", "VNG"], "category": "noise"}
+{"t": "2026-11-17T20:15:00+07:00", "ask": "Why is the sky blue?", "expect_absent": ["Mai", "Bin", "shrimp", "tôm", "Arsenal", "Khoa", "Claude", "Copilot", "guitar", "Sapiens", "corgi", "Da Lat", "Đà Lạt", "VNG"], "category": "noise"}

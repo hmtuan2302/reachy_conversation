@@ -210,3 +210,122 @@ async def test_short_yes_closes_the_follow_up_its_reply_settles() -> None:
     s.submit(_turn("yes", "All set, I'm back to my own voice. Anything else, Tuan?"))
     assert [f.id for f in store.all_open_follow_ups(OWNER_ID)] == [other]
     assert fu != other and chat.kinds == []  # "yes" is still not sent to extraction
+
+
+def test_session_passes_memory_max_tokens(monkeypatch: Any) -> None:
+    seen: dict[str, int] = {}
+
+    def fake(*_a: Any, cap_tokens: int) -> Any:
+        from reachy_demo.memory.briefing import Briefing
+
+        seen["cap"] = cap_tokens
+        return Briefing("[memory]", frozenset(), frozenset())
+
+    monkeypatch.setattr("reachy_demo.memory.session.build_briefing_parts", fake)
+    s, *_ = _session(memory_max_tokens=123)
+    assert s.context() == "[memory]"
+    assert seen["cap"] == 123
+
+
+async def test_episode_summary_gets_vector() -> None:
+    from reachy_demo.memory.vectors import VectorIndex
+    from tests.unit.fake_embedder import FakeEmbedder
+
+    emb = FakeEmbedder()
+    idx = VectorIndex(emb.model)
+    s, store, clock, _ = _session(embedder=emb, index=idx)
+    s.context()
+    s.submit(_turn("We are planning a trip to Da Lat next month"))
+    clock.t += 3 * 3600
+    s.tick()
+    await _run_jobs(s)
+    [(eid, _)] = store.load_vecs("episode", emb.model)
+    assert idx.top(emb.embed(["trip to Da Lat"], "query")[0], "episode", 1, {eid})
+
+
+async def test_backfill_embeds_missing_then_returns_zero() -> None:
+    from reachy_demo.memory.vectors import VectorIndex
+    from tests.unit.fake_embedder import FakeEmbedder
+
+    emb = FakeEmbedder()
+    s, store, _, _ = _session(embedder=emb, index=VectorIndex(emb.model))
+    for i in range(20):
+        store.add_fact(subject_person_id=OWNER_ID, subject_text="Tuan", text=f"fact {i}")
+    assert await s.backfill(15) == 15
+    assert await s.backfill(15) == 5
+    assert await s.backfill(15) == 0
+    assert len(store.load_vecs("fact", emb.model)) == 20
+
+
+def _push_session() -> tuple[MemorySession, MemoryStore, Any]:
+    from reachy_demo.memory.vectors import VectorIndex
+    from tests.unit.fake_embedder import FakeEmbedder
+
+    emb = FakeEmbedder({"sister": "mai", "she": "mai", "study": "mai"})
+    idx = VectorIndex(emb.model)
+    s, store, _, _ = _session(embedder=emb, index=idx)
+    for i in range(12):  # enough facts that the briefing doesn't show them all
+        store.add_fact(subject_person_id=OWNER_ID, subject_text="Tuan", text=f"note {i}",
+                       importance=0.9)  # fmt: skip
+    mai = store.add_fact(subject_person_id=OWNER_ID, subject_text="Mai",
+                         text="Mai studies medicine", importance=0.0)  # fmt: skip
+    idx.put("fact", mai, emb.embed(["Mai studies medicine"], "doc")[0])
+    return s, store, emb
+
+
+async def test_session_related_small_talk_reuses_last_block() -> None:
+    s, _, emb = _push_session()
+    first = await s.related("my sister Mai came to visit me")
+    calls = emb.calls
+    assert "Mai studies medicine" in first
+    assert await s.related("ok") == first
+    assert emb.calls == calls  # small talk: no embedding
+
+
+async def test_session_related_mean_carries_previous_turn() -> None:
+    s, _, _ = _push_session()
+    await s.related("my sister Mai came to visit me")
+    assert "Mai studies medicine" in await s.related("what does she study these days")
+
+
+async def test_session_related_embedder_failure_returns_last_block() -> None:
+    s, _, emb = _push_session()
+    first = await s.related("my sister Mai came to visit me")
+    emb.fail = True
+    assert await s.related("tell me about my sister again") == first
+
+
+async def test_session_related_off_without_embedder() -> None:
+    s, *_ = _session()
+    assert await s.related("my sister Mai came to visit me") == ""
+
+
+async def test_idle_backfill_waits_for_quiet_and_retries_after_failure() -> None:
+    from reachy_demo.memory.session import BACKFILL_QUIET_S
+    from reachy_demo.memory.vectors import VectorIndex
+    from tests.unit.fake_embedder import FakeEmbedder
+
+    emb = FakeEmbedder(fail=True)
+    s, store, clock, _ = _session(embedder=emb, index=VectorIndex(emb.model))
+    store.add_fact(subject_person_id=OWNER_ID, subject_text="Tuan", text="fact a")
+    s.context()  # a turn just happened
+    await s.idle()
+    assert emb.calls == 0  # not while the user is talking
+    clock.t += BACKFILL_QUIET_S + 1
+    await s.idle()
+    assert emb.calls == 1 and store.load_vecs("fact", emb.model) == []  # failed
+    emb.fail = False
+    await s.idle()
+    assert len(store.load_vecs("fact", emb.model)) == 1  # retried on the next idle tick
+
+
+async def test_related_cache_is_dropped_when_the_speaker_changes() -> None:
+    from reachy_demo.memory.store import Speaker
+
+    s, store, _ = _push_session()
+    current = [OWNER]
+    s._speaker = lambda: current[0]
+    assert "Mai studies medicine" in await s.related("my sister Mai came to visit me")
+    store._db.execute("INSERT INTO people(id, role) VALUES (2, 'guest')")
+    current[0] = Speaker(2, "guest")
+    assert await s.related("ok") == ""  # never the owner's cached block

@@ -11,15 +11,20 @@ import asyncio
 import contextlib
 import logging
 import uuid
+from collections import deque
 from collections.abc import Callable
-from datetime import tzinfo
+from datetime import datetime, tzinfo
 from typing import Any
 
-from reachy_demo.memory.briefing import build_briefing
+import numpy as np
+
+from reachy_demo.memory.briefing import DEFAULT_MEMORY_TOKENS, Briefing, build_briefing_parts
 from reachy_demo.memory.consolidate import Consolidator, worth_keeping
 from reachy_demo.memory.episodes import summarize_session
 from reachy_demo.memory.prompts import ChatFn
+from reachy_demo.memory.related import related_block
 from reachy_demo.memory.store import OWNER, Clock, MemoryStore, Speaker
+from reachy_demo.memory.vectors import Embedder, VectorIndex, backfill, embed_one
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +36,11 @@ RECOVER_S = 86400.0  # re-queue unconsolidated turns from the last day at startu
 Job = tuple[
     Any, ...
 ]  # ("turn", event_id, user, answer, speaker) | ("summarize", session_id, person_id)
+
+
+EMPTY = Briefing("", frozenset(), frozenset())
+BACKFILL_PER_TICK = 200  # rows embedded per idle tick
+BACKFILL_QUIET_S = 60.0  # no backfill within this long after a turn: it competes for the CPU
 
 
 class MemorySession:
@@ -46,6 +56,9 @@ class MemorySession:
         maxsize: int = 64,
         poll_s: float = 30.0,
         tz: tzinfo | None = None,
+        memory_max_tokens: int = DEFAULT_MEMORY_TOKENS,
+        embedder: Embedder | None = None,
+        index: VectorIndex | None = None,
     ) -> None:
         self.store = store
         self.consolidator = consolidator
@@ -55,28 +68,87 @@ class MemorySession:
         self._gap_s = gap_s
         self._poll_s = poll_s
         self._tz = tz
+        self._memory_max_tokens = memory_max_tokens
+        self._embedder = embedder
+        self._index = index
         self._queue: asyncio.Queue[Job] = asyncio.Queue(maxsize)
         self.session_id: str | None = None
         self._briefing = ""
+        self._shown = EMPTY
+        self._related = ""
+        self._related_pid: int | None = None
+        self._turn_vecs: deque[np.ndarray] = deque(maxlen=3)
         self._last = 0.0
         self.dropped = 0
         self._recover()  # before any turn, so nothing queued is queued twice
 
     # -- hot path (called by the agent) -------------------------------------------------------
 
+    @property
+    def has_vectors(self) -> bool:
+        """True when an embedding model is loaded, so the per-turn push can run."""
+        return self._embedder is not None and self._index is not None
+
     def context(self) -> str:
         """The [memory] block. A new session (and a fresh briefing) after a gap of `gap_s`."""
+        self._maybe_new_session()
+        return self._briefing
+
+    async def related(self, text: str) -> str:
+        """Memories related to the last ≤3 user turns ("" when none, or no embedder).
+
+        Small talk and embedding failures reuse the previous block, so "ok" keeps the topic.
+        """
+        self._maybe_new_session()
+        if self._embedder is None or self._index is None:
+            return ""
+        speaker = self._speaker()
+        if speaker.person_id != self._related_pid:  # never reuse another speaker's memories
+            self._turn_vecs.clear()
+            self._related = ""
+            self._related_pid = speaker.person_id
+        if not worth_keeping(text):
+            return self._related
+        vec = await embed_one(self._embedder, text, "query")
+        if vec is None:
+            return self._related
+        self._turn_vecs.append(vec)
+        q = np.mean(np.stack(self._turn_vecs), axis=0)
+        q = q / (np.linalg.norm(q) or 1.0)
+        try:
+            self._related = related_block(
+                self.store,
+                self._index,
+                speaker,
+                q,
+                exclude_facts=self._shown.fact_ids,
+                exclude_episodes=self._shown.episode_ids,
+                now=datetime.fromtimestamp(self._clock(), self._tz),
+            )
+        except Exception:  # a broken DB must not break the conversation
+            log.exception("related memories failed")
+        return self._related
+
+    def _maybe_new_session(self) -> None:
         now = self._clock()
         if self.session_id is None or now - self._last > self._gap_s:
             self._end_session()
             self.session_id = uuid.uuid4().hex[:12]
+            self._turn_vecs.clear()  # user-turn vectors live in RAM for one session only
+            self._related = ""
             try:
-                self._briefing = build_briefing(self.store, self._speaker(), now, self._tz)
+                self._shown = build_briefing_parts(
+                    self.store,
+                    self._speaker(),
+                    now,
+                    self._tz,
+                    cap_tokens=self._memory_max_tokens,
+                )
             except Exception:  # a broken DB must not break the conversation
                 log.exception("briefing failed")
-                self._briefing = ""
+                self._shown = EMPTY
+            self._briefing = self._shown.text
         self._last = now
-        return self._briefing
 
     def submit(self, turn: list[dict[str, Any]]) -> None:
         """Log a finished turn (user, assistant and tool messages) and queue its consolidation."""
@@ -153,13 +225,30 @@ class MemorySession:
             # shortcut: replays as the owner (only speaker in Phase 1); use the logged person at M8.
             self._put(("turn", eid, str(p.get("user", "")), str(p.get("answer", "")), OWNER))
 
+    async def backfill(self, limit: int) -> int:
+        """Embed up to `limit` rows still missing a vector; 0 when done (or no embedder)."""
+        if self._embedder is None or self._index is None:
+            return 0
+        facts, episodes = await backfill(self.store, self._embedder, self._index, limit)
+        return facts + episodes
+
+    async def idle(self) -> None:
+        """Worker idle tick: end a stale session; embed missing vectors once the user is quiet.
+
+        Runs every idle tick (one cheap query when nothing is missing), so a failed embed is
+        retried later instead of staying keyword-only until restart.
+        """
+        self.tick()
+        if self._clock() - self._last >= BACKFILL_QUIET_S:
+            await self.backfill(BACKFILL_PER_TICK)
+
     async def run(self) -> None:
         """Background worker: process jobs one by one until cancelled."""
         while True:
             try:
                 job = await asyncio.wait_for(self._queue.get(), self._poll_s)
             except TimeoutError:
-                self.tick()
+                await self.idle()
                 continue
             try:
                 await self._process(job)
@@ -174,7 +263,15 @@ class MemorySession:
             await self.consolidator.consolidate(user, speaker, answer=answer, event_id=eid)
         elif job[0] == "summarize":
             _, sid, pid = job
-            await summarize_session(self.store, self._chat, sid, pid, self._clock)
+            await summarize_session(
+                self.store,
+                self._chat,
+                sid,
+                pid,
+                self._clock,
+                embedder=self._embedder,
+                index=self._index,
+            )
 
     async def drain(self) -> None:
         """Wait until every queued job is done (the worker must be running)."""
