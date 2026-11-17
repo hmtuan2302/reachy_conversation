@@ -1,5 +1,7 @@
 # reachy-demo
 
+All features at a glance: [docs/FEATURES.md](docs/FEATURES.md)
+
 Usage docs per feature: [docs/usage/](docs/usage/)
 
 - [Live transcribe: speech → text (mic / WAV)](docs/usage/transcribe.md)
