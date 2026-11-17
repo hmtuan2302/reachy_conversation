@@ -1,0 +1,67 @@
+import numpy as np
+import pytest
+
+from reachy_demo.voice.speaker_id import KEEP_S, SpeakerGate, voiceprint
+
+RATE = 24_000
+POS_1S = b"\x10\x00" * RATE  # first sample > 0
+NEG_1S = b"\xf0\xff" * RATE  # first sample < 0
+PRINT = np.array([1.0, 0.0])
+seen: list[int] = []
+
+
+def fake_embed(x: np.ndarray, rate: int) -> np.ndarray:
+    assert rate == RATE
+    seen.append(len(x))
+    return np.array([1.0, 0.0]) if x[0] > 0 else np.array([0.6, 0.8])  # cos 1.0 / 0.6
+
+
+def _take(gate: SpeakerGate) -> tuple[str, float | None]:
+    verdict, score = gate.take()
+    return verdict, None if score is None else round(score, 6)
+
+
+def test_owner_guest_unsure() -> None:
+    gate = SpeakerGate(fake_embed, PRINT, high=0.7, low=0.4)
+    gate.feed(POS_1S * 2, speaking=True)
+    assert _take(gate) == ("owner", 1.0)
+    gate.feed(NEG_1S * 2, speaking=True)
+    assert _take(gate) == ("unsure", 0.6)
+    strict = SpeakerGate(fake_embed, PRINT, high=0.9, low=0.7)
+    strict.feed(NEG_1S * 2, speaking=True)
+    assert _take(strict) == ("guest", 0.6)
+
+
+def test_too_short_is_unsure() -> None:
+    seen.clear()
+    gate = SpeakerGate(fake_embed, PRINT, high=0.7, low=0.4)
+    gate.feed(POS_1S[:RATE], speaking=True)  # 0.5 s
+    assert gate.take() == ("unsure", None)
+    assert seen == []
+
+
+def test_silence_not_kept() -> None:
+    gate = SpeakerGate(fake_embed, PRINT, high=0.7, low=0.4)
+    gate.feed(POS_1S * 3, speaking=False)
+    assert gate.take() == ("unsure", None)
+
+
+def test_take_clears() -> None:
+    gate = SpeakerGate(fake_embed, PRINT, high=0.7, low=0.4)
+    gate.feed(POS_1S * 2, speaking=True)
+    assert gate.take()[0] == "owner"
+    assert gate.take() == ("unsure", None)
+
+
+def test_buffer_keeps_last_seconds() -> None:
+    seen.clear()
+    gate = SpeakerGate(fake_embed, PRINT, high=0.7, low=0.4)
+    for _ in range(10):
+        gate.feed(POS_1S, speaking=True)
+    gate.take()
+    assert seen == [int(KEEP_S * RATE)]
+
+
+def test_voiceprint_is_unit_mean() -> None:
+    v = voiceprint([np.array([2.0, 0.0]), np.array([0.0, 3.0])])
+    assert v == pytest.approx([0.70710678, 0.70710678])
