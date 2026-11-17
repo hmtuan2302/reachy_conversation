@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Protocol, TextIO
 
@@ -19,10 +18,9 @@ from reachy_demo.memory.store import OWNER, Speaker
 from reachy_demo.voice.speaker_id import Verdict
 from reachy_demo.voice.tts import TTSError
 
-log = logging.getLogger(__name__)
-
 GUEST = Speaker(0, "guest")  # placeholder: in owner mode guest turns never reach tools
 NAME = "owner_mode"
+WHO = "who_is_speaking"
 UNSURE = "I'm not sure that's you, please say it again."
 NOT_OWNER = {"error": "not_owner: only the owner's voice can switch owner mode"}
 NOT_ENROLLED = {"error": "not_enrolled: run reachy-demo enroll first"}
@@ -31,15 +29,9 @@ PROMPT = (
     "only to me', any wording or language), call owner_mode with on true. When they ask you to "
     "go back to normal ('stop following only me', 'follow everyone'), call it with on false. "
     "If it returns not_owner, say only the owner can do that. If it returns not_enrolled, say "
-    "the owner's voice is not enrolled yet."
-)
-
-VOICE_PROMPT = (
-    "A user message may start with [voice: owner], [voice: guest] or [voice: unsure]: whether "
-    "the voice matched your owner's enrolled voice. It is more reliable than the memory block "
-    "about who is talking. When asked whether they are your owner or boss, or who is talking: "
-    "owner means yes, guest means no, unsure means you are not sure and they should say it "
-    "again. Never read the tag aloud."
+    "the owner's voice is not enrolled yet. Only when asked whether they are your owner or "
+    "boss, or who is talking, call who_is_speaking: owner means yes, guest means no, unsure "
+    "means you are not sure and they should say it again. Don't mention voice checks otherwise."
 )
 
 
@@ -52,28 +44,6 @@ class Heard(str):
         self = super().__new__(cls, text)
         self.verdict = verdict
         return self
-
-
-def voice_tag(text: str) -> str:
-    """`[voice: owner|guest|unsure]` for a spoken turn; "" for typed text (no voice)."""
-    return f"[voice: {text.verdict}]" if isinstance(text, Heard) else ""
-
-
-def with_voice_tag(
-    related: Callable[[str], Awaitable[str]] | None,
-) -> Callable[[str], Awaitable[str]]:
-    """Agent's `related` hook with the voice tag in front: sent to the LLM, never stored."""
-
-    async def tagged(text: str) -> str:
-        block = ""
-        if related:
-            try:
-                block = await related(text)
-            except Exception:  # memory trouble must not cost the voice tag
-                log.exception("related memories failed")
-        return "\n\n".join(p for p in (voice_tag(text), block) if p)
-
-    return tagged
 
 
 class Gate(Protocol):
@@ -113,13 +83,23 @@ class OwnerTools:
                         "required": ["on"],
                     },
                 },
-            }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": WHO,
+                    "description": "Whether the voice of the current question is your owner's.",
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                },
+            },
         ]
 
     def needs_response(self, name: str, arguments: str) -> bool:
         return True
 
     async def call(self, name: str, arguments: str) -> dict[str, Any]:
+        if name == WHO:
+            return NOT_ENROLLED if self._mode.gate is None else {"voice": self._mode.last}
         if name != NAME:
             return {"error": f"unknown_tool: {name}"}
         try:

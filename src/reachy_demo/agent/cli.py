@@ -341,8 +341,6 @@ def run(args: argparse.Namespace) -> int:
     if source is not None:  # owner mode needs a voice; typed turns are always the owner
         sets.append(owner_tools.OwnerTools(mode))
         prompt += f" {owner_tools.PROMPT}"
-    if gate:  # each spoken turn tells the LLM whose voice it was
-        prompt += f" {owner_tools.VOICE_PROMPT}"
     if memory:
         session, tools_ = memory
         sets.append(tools_)
@@ -375,7 +373,6 @@ def run(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return None
-        related = memory[0].related if push and memory else None
         agent = Agent(
             partial(llm, model=model, tools=tools.specs()) if tools else partial(llm, model=model),
             system_prompt=prompt,
@@ -383,7 +380,7 @@ def run(args: argparse.Namespace) -> int:
             context=memory[0].context if memory else None,
             on_turn=memory[0].submit if memory else None,
             max_tokens=budget,
-            related=owner_tools.with_voice_tag(related) if gate else related,
+            related=memory[0].related if push and memory else None,
             debug=show_context if _on("CONTEXT_DEBUG") else None,
         )
         if memory:

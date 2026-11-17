@@ -101,11 +101,9 @@ async def test_converse_tells_mode_which_turn_is_answered() -> None:
     assert begun == [("dance", "owner")]  # the stop's rest keeps the speaker's verdict
 
 
-def test_voice_tag_reaches_the_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_normal_chat_has_no_voice_tag(monkeypatch: pytest.MonkeyPatch) -> None:
     import argparse
     from typing import Any
-
-    from reachy_demo.agent.tools.owner import VOICE_PROMPT
 
     class Gate:
         def feed(self, chunk: bytes, speaking: bool) -> None: ...
@@ -113,17 +111,17 @@ def test_voice_tag_reaches_the_llm(monkeypatch: pytest.MonkeyPatch) -> None:
             return False
 
         def mark_own_voice(self, until: float) -> None: ...
-        def take(self) -> tuple[str, float]:
-            return "guest", 0.1
+        def take(self) -> tuple[str, float | None]:
+            return "unsure", None
 
     sent: list[list[dict[str, Any]]] = []
 
     async def fake_transcribe(_pcm: Any, **kw: Any) -> AsyncIterator[str]:
-        yield "Am I your boss?"
+        yield "Hello."
 
     async def fake_chat(messages: list[dict[str, Any]], **kw: Any) -> AsyncIterator[str]:
         sent.append(messages)
-        yield "No."
+        yield "Hi!"
 
     async def no_audio() -> AsyncIterator[bytes]:
         return
@@ -141,5 +139,5 @@ def test_voice_tag_reaches_the_llm(monkeypatch: pytest.MonkeyPatch) -> None:
         mic=False, stdin=False, file=None, type=False, no_speak=True, robot=False
     )
     assert cli.run(args) == 0
-    assert sent[0][-1] == {"role": "user", "content": "[voice: guest]\n\nAm I your boss?"}
-    assert VOICE_PROMPT in sent[0][0]["content"]
+    assert sent[0][-1] == {"role": "user", "content": "Hello."}
+    assert "[voice:" not in sent[0][0]["content"]

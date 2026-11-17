@@ -11,8 +11,6 @@ from reachy_demo.agent.tools.owner import (
     OwnerMode,
     OwnerTools,
     gated_turns,
-    voice_tag,
-    with_voice_tag,
 )
 from reachy_demo.memory.store import OWNER
 from reachy_demo.voice.speaker_id import Verdict
@@ -198,19 +196,20 @@ async def test_say_does_not_block_turns() -> None:
     assert got == ["b"]
 
 
-def test_voice_tag() -> None:
-    assert voice_tag(Heard("am I your boss?", "guest")) == "[voice: guest]"
-    assert voice_tag("typed") == ""
+async def test_who_is_speaking_reports_the_answered_turn() -> None:
+    mode, _ = _mode()
+    tools = OwnerTools(mode)
+    mode.begin(Heard("am I your boss?", "guest"))
+    assert await tools.call("who_is_speaking", "{}") == {"voice": "guest"}
+    mode.begin(Heard("am I your boss?", "owner"))
+    assert await tools.call("who_is_speaking", "{}") == {"voice": "owner"}
 
 
-async def test_with_voice_tag_prepends_to_related() -> None:
-    async def related(text: str) -> str:
-        return "mem"
+async def test_who_is_speaking_not_enrolled() -> None:
+    assert await OwnerTools(OwnerMode(None)).call("who_is_speaking", "{}") == NOT_ENROLLED
 
-    async def broken(text: str) -> str:
-        raise RuntimeError("db gone")
 
-    heard = Heard("am I your boss?", "owner")
-    assert await with_voice_tag(related)(heard) == "[voice: owner]\n\nmem"
-    assert await with_voice_tag(None)(heard) == "[voice: owner]"
-    assert await with_voice_tag(broken)(heard) == "[voice: owner]"  # memory trouble keeps the tag
+def test_owner_tools_offer_both() -> None:
+    mode, _ = _mode()
+    names = [s["function"]["name"] for s in OwnerTools(mode).specs()]
+    assert names == ["owner_mode", "who_is_speaking"]
