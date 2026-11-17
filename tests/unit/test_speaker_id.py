@@ -71,5 +71,18 @@ def test_to_16k_keeps_a_speech_tone() -> None:
     for rate in (24_000, 48_000):
         x = np.sin(2 * np.pi * 1000 * np.arange(rate) / rate).astype(np.float32)  # 1 s, 1 kHz
         y = to_16k(x, rate)
+        assert y is not None
         assert len(y) == 16_000
         assert np.sqrt(np.mean(y[1000:-1000] ** 2)) == pytest.approx(0.7071, abs=0.01)
+
+
+def test_to_16k_skips_slow_ratios() -> None:
+    # 44.1 kHz needs a 14k-tap filter here: None means "let sherpa resample it"
+    assert to_16k(np.zeros(44_100, dtype=np.float32), 44_100) is None
+
+
+def test_own_voice_window() -> None:
+    gate = SpeakerGate(fake_embed, PRINT, high=0.7, low=0.4)
+    assert not gate.own_voice(10.0)
+    gate.mark_own_voice(12.0)
+    assert gate.own_voice(12.4) and not gate.own_voice(12.6)  # 0.5 s echo tail

@@ -330,11 +330,13 @@ uv run reachy-demo enroll --file data/my_voice1.wav --test data/my_voice_2.wav d
 At start the agent prints `(owner mode: available, high 0.5 low 0.3)`, or `(owner mode: off: <reason>)`. Off only means owner mode can't be turned on. Everything else works.
 
 **How it works.**
-- Each sentence's speech (up to the last 8 s) is scored against your voiceprint on the CPU, in about 50 ms, and the score prints as `(voice: …)`.
+- Each sentence's speech (up to the last 8 s) is scored against your voiceprint on the CPU, in about 50 ms, and the score prints as `(voice: …)`. Reachy's own voice coming back through the mic is left out.
+- The check uses the voice of the sentence being answered, so a guest talking while Reachy thinks doesn't change who the tools obey.
 - Owner mode is off by default: every turn is answered, as before.
 - While owner mode is on:
   - Guest sentences are dropped before the LLM sees them. Reachy doesn't answer, and a guest's "stop" can't interrupt you.
   - Unsure sentences (between the two thresholds, or under 1 s of speech) get "I'm not sure that's you, please say it again." A face check for this case is planned.
+  - A short "stop" is too short to recognise a voice, so anyone's short stop still stops Reachy (stopping is always safe).
   - `dance` and `look_toward_sound` refuse anyone but you.
 - Only a voice scored as you can switch owner mode, on or off.
 - Owner mode resets to off when the agent restarts.

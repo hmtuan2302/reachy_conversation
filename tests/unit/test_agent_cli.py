@@ -238,7 +238,7 @@ def test_stop_check_uses_fast_model_not_llm_model(monkeypatch: pytest.MonkeyPatc
         models.append(kw["model"])
         yield '{"stop": true, "rest": ""}'
 
-    async def fake_converse(*a: Any) -> None:
+    async def fake_converse(*a: Any, **_kw: Any) -> None:
         await a[4]("stop")
 
     monkeypatch.setattr(cli, "chat_stream", fake_chat)

@@ -8,12 +8,15 @@ starts off every run, and while off everyone counts as the owner (as before spea
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Protocol, TextIO
 
+from reachy_demo.audio.player import PlayerError
 from reachy_demo.memory.store import OWNER, Speaker
 from reachy_demo.voice.speaker_id import Verdict
+from reachy_demo.voice.tts import TTSError
 
 GUEST = Speaker(0, "guest")  # placeholder: in owner mode guest turns never reach tools
 NAME = "owner_mode"
@@ -29,6 +32,17 @@ PROMPT = (
 )
 
 
+class Heard(str):
+    """A turn's text plus whose voice it was. Stays a str for the rest of the agent."""
+
+    verdict: Verdict
+
+    def __new__(cls, text: str, verdict: Verdict) -> Heard:
+        self = super().__new__(cls, text)
+        self.verdict = verdict
+        return self
+
+
 class Gate(Protocol):
     def take(self) -> tuple[Verdict, float | None]: ...
 
@@ -39,6 +53,11 @@ class OwnerMode:
         self.gate = gate
         self.on = False
         self.last: Verdict = "owner"
+        self.talking: set[asyncio.Task[None]] = set()  # "say it again" replies playing
+
+    def begin(self, text: str) -> None:
+        """An answer to `text` starts: tools now check its speaker. Typed text is the owner."""
+        self.last = text.verdict if isinstance(text, Heard) else "owner"
 
     def speaker(self) -> Speaker:
         return OWNER if not self.on or self.last == "owner" else GUEST
@@ -89,22 +108,39 @@ async def gated_turns(
     mode: OwnerMode,
     out: TextIO,
     say: Callable[[str], Awaitable[object]] | None = None,
+    is_stop: Callable[[str], Awaitable[bool]] | None = None,
 ) -> AsyncIterator[str]:
-    """Pass each turn on, except guests and unsure speakers while owner mode is on."""
+    """Pass each turn on as `Heard`, except guests and unsure speakers in owner mode.
+
+    `mode.last` is not set here: the agent reads turns ahead, so `OwnerMode.begin` sets it
+    when an answer starts. A too-short unsure turn still passes if `is_stop` says it's a stop:
+    anyone may stop the robot, and "stop" is too short to recognise a voice.
+    """
+
+    async def ask_again(say: Callable[[str], Awaitable[object]]) -> None:
+        try:
+            await say(UNSURE)
+        except (TTSError, PlayerError) as e:  # fail small, as converse's answers do
+            out.write(f"  (speech error: {e})\n")
+            out.flush()
+
     async for text in turns:
         # take() every turn, even with owner mode off: stale speech must not score later
         verdict, score = mode.gate.take() if mode.gate else ("owner", None)
-        mode.last = verdict
         if mode.gate:
             out.write(f"  (voice: {verdict} {'-' if score is None else f'{score:.2f}'})\n")
         if not mode.on or verdict == "owner":
-            yield text
+            yield Heard(text, verdict)
         elif verdict == "guest":
             out.write(f"  (ignored guest: {text})\n")
+        elif score is None and is_stop and await is_stop(text):
+            yield Heard(text, verdict)
         else:
             out.write(f"  (unsure: {text})\n")
             if say:
                 # shortcut: may overlap an answer that is still playing; route through
                 # converse if it does on stage.
-                await say(UNSURE)
+                task = asyncio.create_task(ask_again(say))
+                mode.talking.add(task)  # a strong reference until it finishes
+                task.add_done_callback(mode.talking.discard)
         out.flush()

@@ -91,6 +91,7 @@ async def converse(
     classify: Classify | None = None,
     on_stop: Callable[[], None] | None = None,
     moving: Callable[[], bool] | None = None,
+    on_answer: Callable[[str], None] | None = None,
 ) -> None:
     """Answer each completed user turn in order.
 
@@ -99,6 +100,7 @@ async def converse(
     cancels the answer (its `rest`, if any, is the next turn) and calls `on_stop` (e.g. to drop
     queued head moves); anything else is dropped. With `moving` and `classify`, a turn that
     arrives while no answer runs but the robot still moves is stop-checked first, too.
+    `on_answer(text)` runs as each answer starts (owner mode: whose turn the tools serve).
     """
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     line_open = False  # "bot: " printed, answer line not ended yet
@@ -116,6 +118,8 @@ async def converse(
 
     async def answer(text: str) -> None:
         nonlocal line_open
+        if on_answer:
+            on_answer(text)
         write(f"you: {text}\nbot: ")
         line_open = True
         parts: list[str] = []
@@ -166,7 +170,7 @@ async def converse(
                         await task  # nothing of the old answer runs after this
                     write(("\n" if line_open else "") + "  (stopped)\n")
                     line_open = False
-                return intent.rest or None, ended
+                return _rest_of(heard, intent.rest) or None, ended
             await task
         finally:
             task.cancel()
@@ -188,13 +192,18 @@ async def converse(
                     if on_stop:
                         on_stop()
                     write(f"you: {text}\n  (stopped)\n")
-                    text = intent.rest or await queue.get()
+                    text = _rest_of(text, intent.rest) or await queue.get()
                     continue
             follow_up, ended = await answer_with_barge_in(text, classify)
             text = follow_up or (None if ended else await queue.get())
         await listener  # re-raise a source/S2T failure after the answers already queued
     finally:
         listener.cancel()
+
+
+def _rest_of(turn: str, rest: str) -> str:
+    """A stop's leftover request, still tagged with the voice that said it."""
+    return owner_tools.Heard(rest, turn.verdict) if isinstance(turn, owner_tools.Heard) else rest
 
 
 async def typed_turns(lines: TextIO) -> AsyncIterator[str]:
@@ -232,8 +241,8 @@ async def _tap(
         speaking = vad.feed(chunk)
         if speech:
             speech.feed(chunk, speaking)
-        if gate:
-            gate.feed(chunk, speaking)
+        if gate:  # Reachy's own voice through the mic is not the user's
+            gate.feed(chunk, speaking and not gate.own_voice(time.monotonic()))
         if sound:
             sound.feed(chunk, speaking, time.monotonic())
         yield chunk
@@ -304,7 +313,7 @@ def run(args: argparse.Namespace) -> int:
             keys.get("GEMINI_API_KEY", ""),
             gain=lambda: DUCK if vad.speaking else 1.0,
             clone=voice_tools.CLONE_WAV,
-            on_play=sound.mark_own_voice if sound else None,
+            on_play=partial(_mark_own_voice, [m for m in (sound, gate) if m]),
         )
     )
     # The stop check always uses the fast non-reasoning model: reasoning models would hit its
@@ -318,7 +327,11 @@ def run(args: argparse.Namespace) -> int:
             base_url=base_url,
         ),
     )
-    turns = owner_tools.gated_turns(turns, mode, sys.stdout, say=speak)
+
+    async def is_stop(text: str) -> bool:
+        return (await stop(text)).stop
+
+    turns = owner_tools.gated_turns(turns, mode, sys.stdout, say=speak, is_stop=is_stop)
     memory = memory_from_env(keys["DEEPSEEK_API_KEY"], base_url, memory_max, mode.speaker)
     push, push_line = push_status(memory)
     if memory:
@@ -406,6 +419,7 @@ def run(args: argparse.Namespace) -> int:
                 stop,
                 on_stop=head_tools.stop,
                 moving=lambda: head_tools.busy,
+                on_answer=mode.begin,
             )
             main = with_sound(main, sound, robot.read_doa, lambda: motion.pose["yaw"])
             code = run_until_done(_with_memory(_then_close(main, head_tools), memory))
@@ -413,7 +427,7 @@ def run(args: argparse.Namespace) -> int:
             agent = make_agent(sets, prompt)
             if agent is None:
                 return 2
-            main = converse(turns, agent, sys.stdout, speak, stop)
+            main = converse(turns, agent, sys.stdout, speak, stop, on_answer=mode.begin)
             code = run_until_done(_with_memory(main, memory))
     save_recording(args, rec)
     return code
@@ -422,6 +436,11 @@ def run(args: argparse.Namespace) -> int:
 VISION_PROVIDERS = ("hf", "deepseek")
 DEFAULT_CONTEXT_TOKENS = 8000
 PUSH_RESERVE_TOKENS = 200  # up to 3 related-memory lines of 240 chars, sent with the user turn
+
+
+def _mark_own_voice(markers: list[SoundEvents | SpeakerGate], until: float) -> None:
+    for m in markers:
+        m.mark_own_voice(until)
 
 
 def speaker_gate_from_env() -> SpeakerGate | None:

@@ -20,6 +20,7 @@ import numpy as np
 RATE = 24_000  # the app's mic rate
 KEEP_S = 8.0  # speech kept since the last turn; older speech (untranscribed side talk) drops
 MIN_S = 1.0  # shorter speech is too little to judge
+ECHO_TAIL_S = 0.5  # playback latency + room echo after Reachy's own audio
 DEFAULT_MODEL = Path("models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx")
 VOICEPRINT = Path("data/voice/owner.npy")
 # Measured 2026-11-17, enrolled on my_voice1.wav (CAM++): owner my_voice_2.wav 0.73, another
@@ -63,6 +64,14 @@ class SpeakerGate:
         self._max = int(keep_s * RATE) * 2
         self._chunks: deque[bytes] = deque()
         self._bytes = 0
+        self._own_until = float("-inf")
+
+    def mark_own_voice(self, until: float) -> None:
+        """Reachy's speaker plays until `until` (monotonic): that audio is not the user."""
+        self._own_until = max(self._own_until, until)
+
+    def own_voice(self, now: float) -> bool:
+        return now < self._own_until + ECHO_TAIL_S
 
     def feed(self, chunk: bytes, speaking: bool) -> None:
         """24 kHz mono PCM16 chunk; only speech is kept, at most `keep_s` of it."""
@@ -80,7 +89,12 @@ class SpeakerGate:
                 self._bytes -= extra
 
     def take(self) -> tuple[Verdict, float | None]:
-        """Score the speech since the last call, then forget it. None score: too short."""
+        """Score the speech since the last call, then forget it. None score: too short.
+
+        shortcut: matches audio to a turn by arrival time, so speech that starts before the
+        transcript arrives (a guest right after the owner) is scored with it; score per VAD
+        segment with timestamps if crowds cause wrong verdicts.
+        """
         pcm = b"".join(self._chunks)
         self._chunks.clear()
         self._bytes = 0
@@ -105,16 +119,20 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
     return x.astype(np.float32), rate
 
 
-def to_16k(x: np.ndarray, rate: int) -> np.ndarray:
+def to_16k(x: np.ndarray, rate: int) -> np.ndarray | None:
     """Resample to 16 kHz: zero-stuff by L, windowed-sinc low-pass, keep every M-th sample.
 
     Scores match sherpa-onnx's own resampler within 0.03 on the test clips (24 and 48 kHz).
+    None for rates with a large L/M (44.1 kHz: 160/441), where this filter would take
+    seconds; the caller then lets sherpa resample.
     """
     if rate == 16_000:
         return x
     g = math.gcd(16_000, rate)
     up, down = 16_000 // g, rate // g
     m = max(up, down)
+    if m > 3:
+        return None
     n = np.arange(-16 * m, 16 * m + 1)
     h = np.sinc(n / m) * np.hamming(len(n)) / m
     y = np.zeros(len(x) * up, dtype=np.float32)
@@ -135,9 +153,13 @@ def load_sherpa_embed(model: Path) -> Embed:
 
     def embed(samples: np.ndarray, rate: int) -> np.ndarray:
         stream = extractor.create_stream()
-        # resample here: sherpa's own resampler logs a line to stderr on every call
-        x = to_16k(np.asarray(samples, dtype=np.float32), rate)
-        stream.accept_waveform(16_000, np.ascontiguousarray(x))
+        # resample here when cheap: sherpa's own resampler logs a line to stderr on every call
+        x = np.asarray(samples, dtype=np.float32)
+        y = to_16k(x, rate)
+        if y is None:
+            stream.accept_waveform(rate, np.ascontiguousarray(x))
+        else:
+            stream.accept_waveform(16_000, np.ascontiguousarray(y))
         stream.input_finished()
         return np.array(extractor.compute(stream))
 
