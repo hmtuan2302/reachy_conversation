@@ -18,17 +18,20 @@ from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
-# A full pose: head position (mm), head orientation (degrees), antenna joints (degrees,
-# in set_target's order). Head tools only change roll/pitch/yaw; dances use every axis.
+# A full pose: head position (mm), head orientation (degrees, yaw in the world frame), antenna
+# joints (degrees, in set_target's order) and body yaw (degrees). Head tools change roll/pitch/
+# yaw; dances use every head axis; only sound turns move the body.
 Pose = dict[str, float]
 SetPose = Callable[[Pose], None]  # set_target(pose); returns at once
-AXES = ("x", "y", "z", "roll", "pitch", "yaw", "antenna_0", "antenna_1")
+AXES = ("x", "y", "z", "roll", "pitch", "yaw", "antenna_0", "antenna_1", "body_yaw")
 # The SDK's neutral: head centered, antennas ~10° apart (INIT_ANTENNAS_JOINT_POSITIONS,
 # "to reduce shaking at vertical").
 NEUTRAL: Pose = {**dict.fromkeys(AXES, 0.0), "antenna_0": -10.0, "antenna_1": 10.0}
 # Safety net: no pose outside these is ever sent, whatever a move computes. Set to the widest
 # range the dances library uses (sampled 2026-11-16: yaw 45°, pitch 30°, roll 25°, y/z 40 mm,
-# x 20 mm, antennas 60° + the 10° neutral), so its moves play unclipped.
+# x 20 mm, antennas 60° + the 10° neutral), so its moves play unclipped. `yaw` is the head's
+# yaw relative to the body. Body yaw stays well inside the SDK's hard limit (160°; head-to-body
+# 65°).
 LIMITS: Pose = {
     "x": 20.0,
     "y": 40.0,
@@ -38,6 +41,7 @@ LIMITS: Pose = {
     "yaw": 45.0,
     "antenna_0": 70.0,
     "antenna_1": 70.0,
+    "body_yaw": 120.0,
 }
 EASE_S = 0.5  # easing into and out of a dance, and back to neutral after a stop
 MAX_LONG_S = 15.0  # longest dance, repeats included
@@ -64,8 +68,14 @@ def _lerp(a: Pose, b: Pose, f: float) -> Pose:
     return {k: a[k] + (b[k] - a[k]) * f for k in AXES}
 
 
+def _clip(v: float, limit: float, center: float = 0.0) -> float:
+    return min(max(v, center - limit), center + limit)
+
+
 def clamp(pose: Pose) -> Pose:
-    return {k: min(max(pose.get(k, 0.0), -LIMITS[k]), LIMITS[k]) for k in AXES}
+    out = {k: _clip(pose.get(k, 0.0), LIMITS[k]) for k in AXES}
+    out["yaw"] = _clip(pose.get("yaw", 0.0), LIMITS["yaw"], out["body_yaw"])  # head vs body
+    return out
 
 
 def goto(name: str, target: Pose, duration_s: float = 1.0) -> Move:

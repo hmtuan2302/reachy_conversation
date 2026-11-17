@@ -166,7 +166,9 @@ uv run reachy-demo agent --type --robot        # or type the commands
 | `roll_head` (roll, lean toward a shoulder) | `left` / `right` / `center` | +15° / −15° / 0°, in 1 s |
 | `dance` | `move`: one of the 20 moves below (omit for a random one); `repeat` | 2–5 s per pass, at most 15 s |
 | `stop_head` | (none) | ends a dance now and drops queued moves |
+| `look_toward_sound` | `source`: `speaker` / `noise` | turns head and body toward your last sentence or the last loud sound; see [sound-direction.md](sound-direction.md) |
 
+- `turn_head` angles are from the robot's front, so it also brings a turned body back to 0°.
 - Head moves go to a **fixed angle only**. Each one changes its own axis and keeps the others, so "right and down" ends at yaw −20°, pitch +15°. Asking twice ("more left") stays at +20°.
 - Change the angles in `POSES` in [src/reachy_demo/agent/tools/head.py](../../src/reachy_demo/agent/tools/head.py).
 

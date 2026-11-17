@@ -118,3 +118,14 @@ async def test_pacing_starts_when_audio_arrives(tmp_path: Path) -> None:
     t0 = time.monotonic()
     await play_and_save(late(), path=out, player_cmd=f"sh -c 'cat > {played}'", lead_s=0.1)
     assert time.monotonic() - t0 >= 0.5 + 0.28  # the wait for audio is not counted as played
+
+
+async def test_on_play_reports_when_the_speaker_runs_out(tmp_path: Path) -> None:
+    ends: list[float] = []
+    await play_and_save(
+        _chunks(b"\x00\x00" * 2400),
+        path=None,
+        player_cmd="sh -c 'cat > /dev/null'",
+        on_play=ends.append,
+    )
+    assert ends and ends[-1] > 0

@@ -16,7 +16,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from functools import partial
 from pathlib import Path
-from typing import TextIO
+from typing import Literal, TextIO
 
 from dotenv import find_dotenv, load_dotenv
 
@@ -31,8 +31,10 @@ from reachy_demo.agent.llm import (
 )
 from reachy_demo.agent.tools import Toolbox, ToolSet, camera, head
 from reachy_demo.agent.tools import memory as memory_tools
+from reachy_demo.agent.tools import sound as sound_tools
 from reachy_demo.agent.tools import voice as voice_tools
 from reachy_demo.audio.player import PlayerError
+from reachy_demo.audio.sound_events import DEFAULT_LOUD_RMS, SoundEvents, with_sound
 from reachy_demo.audio.vad import EnergyVAD
 from reachy_demo.memory.briefing import DEFAULT_MEMORY_TOKENS
 from reachy_demo.memory.consolidate import Consolidator
@@ -210,12 +212,17 @@ async def typed_turns(lines: TextIO) -> AsyncIterator[str]:
 
 
 async def _tap(
-    chunks: AsyncIterator[bytes], vad: EnergyVAD, speech: voice_tools.SpeechBuffer | None = None
+    chunks: AsyncIterator[bytes],
+    vad: EnergyVAD,
+    speech: voice_tools.SpeechBuffer | None = None,
+    sound: SoundEvents | None = None,
 ) -> AsyncIterator[bytes]:
     async for chunk in chunks:
         speaking = vad.feed(chunk)
         if speech:
             speech.feed(chunk, speaking)
+        if sound:
+            sound.feed(chunk, speaking, time.monotonic())
         yield chunk
 
 
@@ -266,10 +273,13 @@ def run(args: argparse.Namespace) -> int:
     # Voice cloning needs local TTS (Gemini can't clone). Typed input gives no sample, but the
     # tools stay so a clone from an earlier run can still be stopped.
     speech = None if args.no_speak or uses_gemini() else voice_tools.SpeechBuffer()
+    sound = sound_from_env() if args.robot else None
+    if sound is False:
+        return 2
     if source is None:
         turns = typed_turns(sys.stdin)
     else:
-        audio, rec = recorded(args, _tap(source, vad, speech))
+        audio, rec = recorded(args, _tap(source, vad, speech, sound or None))
         turns = transcribe_stream(audio, hf_token=keys["HF_TOKEN"])
     speak = (
         None
@@ -278,6 +288,7 @@ def run(args: argparse.Namespace) -> int:
             keys.get("GEMINI_API_KEY", ""),
             gain=lambda: DUCK if vad.speaking else 1.0,
             clone=voice_tools.CLONE_WAV,
+            on_play=sound.mark_own_voice if sound else None,
         )
     )
     # The stop check always uses the fast non-reasoning model: reasoning models would hit its
@@ -355,6 +366,9 @@ def run(args: argparse.Namespace) -> int:
             head_tools = head.HeadTools(motion, load_dances())
             prompt += f" {head.PROMPT}"
             sets.append(head_tools)
+            assert sound  # made above for --robot
+            sets.append(sound_tools.SoundTools(sound, motion))
+            prompt += f" {sound_tools.PROMPT}"
             if robot.has_camera:
                 ask, label = vision_asker(vision, keys, base_url)
                 print(f"  (camera on, vision: {label})")
@@ -374,6 +388,7 @@ def run(args: argparse.Namespace) -> int:
                 on_stop=head_tools.stop,
                 moving=lambda: head_tools.busy,
             )
+            main = with_sound(main, sound, robot.read_doa, lambda: motion.pose["yaw"])
             code = run_until_done(_with_memory(_then_close(main, head_tools), memory))
         else:
             agent = make_agent(sets, prompt)
@@ -388,6 +403,19 @@ def run(args: argparse.Namespace) -> int:
 VISION_PROVIDERS = ("hf", "deepseek")
 DEFAULT_CONTEXT_TOKENS = 8000
 PUSH_RESERVE_TOKENS = 200  # up to 3 related-memory lines of 240 chars, sent with the user turn
+
+
+def sound_from_env() -> SoundEvents | Literal[False]:
+    """The sound-direction store (SOUND_RMS), or False after printing a config error."""
+    raw = os.environ.get("SOUND_RMS", "").strip()
+    try:
+        loud = float(raw) if raw else DEFAULT_LOUD_RMS
+    except ValueError:
+        loud = 0.0
+    if loud <= 0:
+        print(f"config error: SOUND_RMS must be a positive number, got {raw!r}", file=sys.stderr)
+        return False
+    return SoundEvents(loud)
 
 
 def _on(name: str) -> bool:

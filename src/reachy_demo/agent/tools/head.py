@@ -156,7 +156,10 @@ class HeadTools:
             direction = args.get("direction")
             if direction not in angles:
                 return {"error": f"bad_arguments: direction must be one of {list(angles)}"}
-            move = goto(name, {**self._motion.planned(), axis: angles[direction]}, self._move_s)
+            target = {**self._motion.planned(), axis: angles[direction]}
+            if axis == "yaw":  # fixed angles from the robot's front: bring a turned body back
+                target["body_yaw"] = 0.0
+            move = goto(name, target, self._move_s)
             label = f"{name} {direction}"
         else:
             return {"error": f"unknown_tool: {name}"}

@@ -33,7 +33,10 @@ def uses_gemini() -> bool:
 
 
 def speaker_from_env(
-    api_key: str, gain: Callable[[], float] | None = None, clone: Path | None = None
+    api_key: str,
+    gain: Callable[[], float] | None = None,
+    clone: Path | None = None,
+    on_play: Callable[[float], None] | None = None,
 ) -> Callable[[str], Coroutine[Any, Any, Path | None]]:
     """speak(text) -> saved WAV path, or None with SAVE_SPEECH=off. Raises TTSError / PlayerError.
 
@@ -55,7 +58,9 @@ def speaker_from_env(
             else vieneu_stream(text, voice=voice, ref_audio=clone if cloned else None)
         )
         path = speech_path(SPEECH_DIR, next(counter)) if save else None
-        return await play_and_save(chunks, path=path, player_cmd=player_cmd, gain=gain)
+        return await play_and_save(
+            chunks, path=path, player_cmd=player_cmd, gain=gain, on_play=on_play
+        )
 
     return speak
 

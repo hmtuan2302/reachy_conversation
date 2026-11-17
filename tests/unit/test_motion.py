@@ -222,3 +222,11 @@ async def test_new_dance_accepted_right_after_stop() -> None:
     assert robot.poses[-1] == (0.0, 0.0, 0.0)
     assert len(robot.poses) < 3 * 80 + 80
     await m.close()
+
+
+def test_clamp_keeps_head_within_reach_of_the_body() -> None:
+    from reachy_demo.robot.motion import clamp
+
+    pose = clamp({**NEUTRAL, "body_yaw": 200.0, "yaw": 0.0})
+    assert pose["body_yaw"] == LIMITS["body_yaw"]
+    assert pose["yaw"] == LIMITS["body_yaw"] - LIMITS["yaw"]  # dragged along with the body

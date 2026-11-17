@@ -7,8 +7,10 @@ catalog only and never talks to the robot.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import math
+import urllib.request
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -20,6 +22,26 @@ log = logging.getLogger(__name__)
 
 WAKE_S = 2.0  # rest pose -> neutral at startup
 REST_S = 2.0  # neutral -> rest pose at exit
+DAEMON_PORT = 8000  # the daemon's REST API (ReachyMini's default port)
+DOA_TIMEOUT_S = 0.5
+
+
+def doa_reader(host: str) -> Callable[[], tuple[float, bool] | None]:
+    """Read the mic array's direction of arrival from the daemon (`GET /api/state/doa`).
+
+    The daemon caches DoA at 10 Hz and answers null without a mic array. Network errors raise
+    OSError; callers skip that reading.
+    """
+    url = f"http://{host}:{DAEMON_PORT}/api/state/doa"
+
+    def read() -> tuple[float, bool] | None:
+        with urllib.request.urlopen(url, timeout=DOA_TIMEOUT_S) as r:  # noqa: S310 (fixed http URL)
+            doa = json.loads(r.read())
+        if not isinstance(doa, dict):
+            return None
+        return float(doa["angle"]), bool(doa["speech_detected"])
+
+    return read
 
 
 @dataclass(frozen=True)
@@ -27,6 +49,8 @@ class Robot:
     set_pose: SetPose  # send one target, return at once; only robot/motion.py calls it
     grab_jpeg: Callable[[], bytes | None]  # current camera frame; None without a camera
     has_camera: bool
+    # (angle rad: 0 = left, pi/2 = front, pi = right; speech) or None. Blocks up to DOA_TIMEOUT_S.
+    read_doa: Callable[[], tuple[float, bool] | None]
 
 
 def _open(host: str, camera: bool) -> Any:
@@ -75,7 +99,9 @@ def connect_robot(host: str, camera: bool = True) -> Iterator[Robot]:
         has_camera = mini.media.camera is not None
 
         def set_pose(p: Pose) -> None:
-            mini.set_target(head=head(p), antennas=antennas(p))
+            mini.set_target(
+                head=head(p), antennas=antennas(p), body_yaw=math.radians(p["body_yaw"])
+            )
 
         def grab_jpeg() -> bytes | None:
             return mini.media.get_frame_jpeg() if has_camera else None
@@ -86,7 +112,7 @@ def connect_robot(host: str, camera: bool = True) -> Iterator[Robot]:
             # present pose (SDK set_target note), so moves must come after it.
             mini.enable_motors()
             mini.goto_target(head=head(NEUTRAL), antennas=antennas(NEUTRAL), duration=WAKE_S)
-            yield Robot(set_pose, grab_jpeg, has_camera)
+            yield Robot(set_pose, grab_jpeg, has_camera, doa_reader(host))
         finally:
             try:
                 # Like ReachyMini.goto_sleep(), without its sound (media sound isn't used).

@@ -38,7 +38,7 @@ Rules **[arch]**:
 | `FaceTrack` | Target = the speaking/largest face centre → `look_at_image` pose (computed, not executed: `perform_movement=False`). The target is passed through a 1-euro filter. |
 | `Mimic` | Owner face head yaw/pitch/roll (from the landmarker matrix) mirrored (yaw negated for a mirror effect), scaled 0.8, clamped to ±30° yaw / ±20° pitch / ±15° roll, 1-euro filtered. Lag budget ≤ 300 ms (F6). |
 | `PointFollow` | Target = pointed point (see [03](03-perception.md) §2) in the capture pose. |
-| `Investigate` | Turn toward the DoA yaw (head first, then body yaw if > 45°), wait 500 ms, grab a frame → `describe()` → inject the event into the conversation. Low confidence → a 3-pose sweep. |
+| `Investigate` (deferred; F7 is on request for now, see [02 §6](02-voice-and-audio.md#6-sound-events-f7)) | Turn toward the DoA yaw (head first, then body yaw if > 45°), wait 500 ms, grab a frame → `describe()` → inject the event into the conversation. Low confidence → a 3-pose sweep. |
 | `Search` | Drives the scan in [03](03-perception.md) §5. Reports progress to the tool via a future. |
 | `LookAt(label)` | Look at the best detection of the label; re-acquires each tick. This is the "track object" of F4. |
 

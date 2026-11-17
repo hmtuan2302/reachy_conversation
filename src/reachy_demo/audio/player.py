@@ -37,12 +37,15 @@ async def play_and_save(
     player_cmd: str | None,
     gain: Callable[[], float] | None = None,
     lead_s: float = 0.2,
+    on_play: Callable[[float], None] | None = None,
 ) -> Path | None:
     """Play chunks as they arrive (if `player_cmd`); save everything received to `path`, if set.
 
     Playback is paced to stay only `lead_s` ahead of the speaker, so `gain()` (read per 100 ms
-    piece) changes what is heard soon. The saved WAV is unscaled. Source errors are re-raised
-    after saving; playback problems raise PlayerError after saving.
+    piece) changes what is heard soon. `on_play(until)` gets the monotonic time the speaker runs
+    out of audio, after each piece (so others can skip Reachy's own voice). The saved WAV is
+    unscaled. Source errors are re-raised after saving; playback problems raise PlayerError
+    after saving.
     """
     pcm = bytearray()
     problem = ""
@@ -72,6 +75,8 @@ async def play_and_save(
                 piece = chunk[i : i + PIECE]
                 # a starved speaker (waiting for TTS) doesn't count as played
                 plays_until = max(plays_until, time.monotonic()) + len(piece) / BYTES_PER_S
+                if on_play:
+                    on_play(plays_until)
                 try:
                     proc.stdin.write(_scaled(piece, gain() if gain else 1.0))
                     await proc.stdin.drain()

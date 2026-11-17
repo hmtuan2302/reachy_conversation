@@ -84,6 +84,8 @@ Owner      audio_in   TurnMgr    Gate     Realtime     Agent      Arbiter/Search
 
 ## 6. Sound events (F7)
 
+> **Decision 2026-11-17 [arch]:** F7 ships first **on request**, not as the reactive `Investigate`. The app stores the latest loud sound and the latest voice direction ([audio/sound_events.py](../../src/reachy_demo/audio/sound_events.py)), and the agent tool `look_toward_sound` turns when the user asks ("what happened?", "turn to me"). Head yaw stays ±45° from the body and body yaw ±120°. Past that the robot says where the sound was and asks the user to check. The automatic `Investigate` below waits for the arbiter. Usage: [sound-direction.md](../usage/sound-direction.md).
+
 - **Onset detector**: short-term RMS (32 ms) vs. a slow ambient estimate (EMA over 5 s). Trigger when `rms_db − ambient_db ≥ ONSET_DB` (default 15 dB, calibrated on site), rise time < 50 ms, and not during robot speech. Refractory period 3 s.
 - **Direction**: median of DoA readings within ±150 ms of the onset from the 10 Hz `doa_poller` buffer (`GET /api/state/doa` or `media.get_DoA()`). Map 0 = left, π/2 = front, π = right → target yaw `= (π/2 − angle)` clamped to ±60° head yaw plus body yaw for the rest **[verify sign convention]**.
 - **Confidence**: low if the DoA spread > 30°. Then Investigate does a short camera sweep instead of a single turn.
