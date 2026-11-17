@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import unicodedata
 from dataclasses import dataclass
 
 from reachy_demo.agent.agent import ChatFn
@@ -31,9 +33,28 @@ class Intent:
 
 NOT_STOP = Intent(False, "")
 
+# A turn that is only a stop phrase ("Stop, stop!", "Thôi đi", "Dừng lại.") skips the LLM,
+# saving its 0.4-1.3 s while Reachy keeps talking. Anything longer still goes to the LLM.
+_STOP = r"(?:stop|wait|enough|thoi|dung lai|dung|du roi|im di|im lang)"
+_FILLER = r"(?:ok|okay|please|di|nhe|nha|reachy)"
+_BARE_STOP = re.compile(rf"(?:{_FILLER} )*{_STOP}(?: (?:{_STOP}|{_FILLER}))*")
+
+
+def _fold(text: str) -> str:
+    """Lowercase, no accents, letters only: "Thôi, dừng lại!" -> "thoi dung lai"."""
+    decomposed = unicodedata.normalize("NFD", text.replace("đ", "d").replace("Đ", "D"))
+    plain = "".join(c for c in decomposed if not unicodedata.combining(c)).lower()
+    return " ".join(re.sub(r"[^a-z]+", " ", plain).split())
+
+
+def is_bare_stop(text: str) -> bool:
+    return _BARE_STOP.fullmatch(_fold(text)) is not None
+
 
 async def classify(text: str, chat: ChatFn, timeout_s: float = 2.0) -> Intent:
     """Classify `text`. Any failure is NOT_STOP: never cancel an answer by mistake."""
+    if is_bare_stop(text):
+        return Intent(True, "")
     messages = [{"role": "system", "content": PROMPT}, {"role": "user", "content": text}]
     try:
         async with asyncio.timeout(timeout_s):

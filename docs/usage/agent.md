@@ -141,7 +141,9 @@ While Reachy answers, the mic keeps listening.
 - **"Stop, <question>":** it stops, then answers the question: `stop, what time is it?`
 - **Anything else** said while Reachy talks (fillers, side talk, a question without a stop word) is dropped and shown as `  (ignored: …)` after the answer.
 
-The stop takes effect after you finish the sentence: turn end (about 0.5–1.2 s) plus the stop check by DeepSeek (about 0.3–0.5 s). Reachy stays at 25% volume meanwhile. A short tail (about 0.2 s) that already reached the speaker can still be heard. If the stop check fails or takes over 2 s, it doesn't stop.
+The stop takes effect after you finish the sentence: turn end (about 0.5–1.2 s), then the stop check. A turn that is only a stop phrase ("stop", "stop stop", "wait", "enough", "thôi (đi)", "dừng (lại) (đi)", "đủ rồi", "im đi") stops at once. Anything longer ("stop, what time is it?") goes to DeepSeek, which adds about 0.4–1.3 s. Reachy stays at 25% volume meanwhile.
+
+**Say "Stop" or "Thôi", not "Dừng lại" alone.** In a test on 2026-11-17, speech-to-text returned nothing for a lone "Dừng lại." (2 of 2 runs), so it was never seen, and nothing is printed. "Stop." and "Thôi." came through. The first word of a short phrase can also be cut off ("Thôi, dừng lại đi" → "...dừng lại đi"). A short tail (about 0.2 s) that already reached the speaker can still be heard. If the stop check fails or takes over 2 s, it doesn't stop.
 
 Tune when it ducks with `VAD_RMS` in `.env` (default 500). `uv run python scripts/mic_check.py` prints your mic's `rms`: set `VAD_RMS` above the noise level and below your speech. A headset avoids Reachy hearing itself.
 

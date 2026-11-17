@@ -32,7 +32,7 @@ def _chat(reply: str, seen: list[list[dict[str, str]]] | None = None):  # type: 
     ],
 )
 async def test_classify_parses(reply: str, expected: Intent) -> None:
-    assert await classify("stop", _chat(reply)) == expected
+    assert await classify("stop talking", _chat(reply)) == expected
 
 
 async def test_chat_error_is_not_stop() -> None:
@@ -40,7 +40,7 @@ async def test_chat_error_is_not_stop() -> None:
         raise LLMError("DeepSeek returned 401")
         yield ""
 
-    assert await classify("stop", chat) == Intent(False, "")
+    assert await classify("stop talking", chat) == Intent(False, "")
 
 
 async def test_timeout_is_not_stop() -> None:
@@ -48,11 +48,44 @@ async def test_timeout_is_not_stop() -> None:
         await asyncio.sleep(1)
         yield '{"stop": true, "rest": ""}'
 
-    assert await classify("stop", chat, timeout_s=0.05) == Intent(False, "")
+    assert await classify("stop talking", chat, timeout_s=0.05) == Intent(False, "")
 
 
 async def test_prompt_carries_the_text() -> None:
     seen: list[list[dict[str, str]]] = []
-    await classify("dừng lại đi", _chat('{"stop": true, "rest": ""}', seen))
+    await classify("dừng lại, kể chuyện khác đi", _chat('{"stop": true, "rest": ""}', seen))
     assert seen[0][0]["role"] == "system"
-    assert seen[0][-1] == {"role": "user", "content": "dừng lại đi"}
+    assert seen[0][-1] == {"role": "user", "content": "dừng lại, kể chuyện khác đi"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Stop.",
+        "Stop, stop!",
+        "stop",
+        "Okay, stop.",
+        "Thôi.",
+        "Thoi--",
+        "Thôi đi.",
+        "Dừng lại.",
+        "...dừng lại đi.",
+        "Đủ rồi.",
+        "Wait!",
+        "Im đi",
+    ],
+)
+async def test_bare_stop_skips_the_llm(text: str) -> None:
+    seen: list[list[dict[str, str]]] = []
+    assert await classify(text, _chat('{"stop": false}', seen)) == Intent(True, "")
+    assert seen == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["ok", "stop, what time is it?", "don't stop", "wait a second, tell me more", "I'm fine"],
+)
+async def test_anything_more_goes_to_the_llm(text: str) -> None:
+    seen: list[list[dict[str, str]]] = []
+    await classify(text, _chat('{"stop": false}', seen))
+    assert len(seen) == 1
