@@ -78,3 +78,12 @@ async def test_bad_source() -> None:
 async def test_speaks_the_result() -> None:
     tools, _, _ = _tools(None)
     assert tools.needs_response(NAME, "{}")
+
+
+async def test_look_toward_sound_refused_for_guest() -> None:
+    from reachy_demo.agent.tools.owner import GUEST
+    from reachy_demo.agent.tools.sound import NOT_OWNER
+
+    motion = Motion(lambda p: None, hz=1000, clock=FakeClock())
+    tools = SoundTools(FixedSound(None), motion, clock=lambda: 105.0, speaker=lambda: GUEST)
+    assert await _call(tools, "speaker") == NOT_OWNER

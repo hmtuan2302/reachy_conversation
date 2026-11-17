@@ -21,6 +21,7 @@ from reachy_demo.audio.sound_events import (
     turn_seconds,
     wrap,
 )
+from reachy_demo.memory.store import OWNER, Speaker
 from reachy_demo.robot.motion import Motion, goto
 
 log = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ MIN_TURN_S = 1.0
 # The chip reports a half circle, so a sound behind can read as its mirror in front.
 MIRROR_NOTE = "The microphones cannot tell front from back, so it may be the mirror spot behind."
 
+NOT_OWNER = {"error": "not_owner: only the owner can ask for that right now"}
 PROMPT = (
     "Your microphones remember where sounds came from. When the user asks you to turn or look "
     "toward them ('turn to me', 'look at me', 'where am I?'), call look_toward_sound with "
@@ -42,8 +44,14 @@ PROMPT = (
 
 class SoundTools:
     def __init__(
-        self, sound: SoundEvents, motion: Motion, clock: Callable[[], float] = time.monotonic
+        self,
+        sound: SoundEvents,
+        motion: Motion,
+        clock: Callable[[], float] = time.monotonic,
+        speaker: Callable[[], Speaker] = lambda: OWNER,
     ) -> None:
+        """`speaker`: who said the current turn; only the owner may use this (owner mode)."""
+        self._speaker = speaker
         self._sound = sound
         self._motion = motion
         self._clock = clock
@@ -72,6 +80,8 @@ class SoundTools:
     async def call(self, name: str, arguments: str) -> dict[str, Any]:
         if name != NAME:
             return {"error": f"unknown_tool: {name}"}
+        if self._speaker() != OWNER:
+            return NOT_OWNER
         try:
             source = json.loads(arguments or "{}").get("source")
         except (json.JSONDecodeError, AttributeError):

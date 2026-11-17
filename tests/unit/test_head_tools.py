@@ -151,3 +151,23 @@ async def test_dance_without_a_move_picks_one() -> None:
 )
 def test_moves_are_silent_unless_reply_flagged(arguments: str, needed: bool) -> None:
     assert _tools()[0].needs_response("turn_head", arguments) is needed
+
+
+async def test_dance_refused_for_guest() -> None:
+    from reachy_demo.agent.tools.head import NOT_OWNER
+    from reachy_demo.agent.tools.owner import GUEST
+
+    motion = Motion(lambda p: None, hz=1000, clock=FakeClock())
+    tools = HeadTools(motion, DANCES, move_s=0.2, speaker=lambda: GUEST)
+    assert await tools.call(DANCE, json.dumps({"move": "bob"})) == NOT_OWNER
+    assert not tools.busy
+
+
+async def test_stop_and_turn_allowed_for_guest() -> None:
+    from reachy_demo.agent.tools.owner import GUEST
+
+    motion = Motion(lambda p: None, hz=1000, clock=FakeClock())
+    tools = HeadTools(motion, DANCES, move_s=0.2, speaker=lambda: GUEST)
+    assert await tools.call(STOP, "{}") == {"status": "stopped"}
+    assert "started" in (await tools.call("turn_head", json.dumps({"direction": "left"})))["status"]
+    await tools.close()

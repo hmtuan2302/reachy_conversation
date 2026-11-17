@@ -11,9 +11,10 @@ from __future__ import annotations
 import json
 import logging
 import random
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
+from reachy_demo.memory.store import OWNER, Speaker
 from reachy_demo.robot.dances import Dance
 from reachy_demo.robot.motion import MAX_LONG_S, Motion, dance, goto
 
@@ -35,6 +36,7 @@ DANCE = "dance"
 STOP = "stop_head"
 MOVE_S = 1.0
 
+NOT_OWNER = {"error": "not_owner: only the owner can ask for that right now"}
 PROMPT = (
     "You have a head you can move with turn_head (left/right), tilt_head (up/down) and "
     "roll_head (lean left/right), and you can dance. Each head tool changes one axis and "
@@ -59,9 +61,15 @@ class HeadTools:
     """Turns tool calls into moves for the motion loop. Validation lives here."""
 
     def __init__(
-        self, motion: Motion, dances: Mapping[str, Dance] | None = None, move_s: float = MOVE_S
+        self,
+        motion: Motion,
+        dances: Mapping[str, Dance] | None = None,
+        move_s: float = MOVE_S,
+        speaker: Callable[[], Speaker] = lambda: OWNER,
     ) -> None:
+        """`speaker`: who said the current turn; only the owner may dance (owner mode)."""
         self._motion = motion
+        self._speaker = speaker
         self._dances = dict(dances or {})  # no dances: the dance tool isn't offered
         self._move_s = move_s
 
@@ -142,6 +150,8 @@ class HeadTools:
             self._motion.stop()
             return {"status": "stopped"}
         if name == DANCE and self._dances:
+            if self._speaker() != OWNER:
+                return NOT_OWNER
             move_name = args.get("move") or random.choice(list(self._dances))  # noqa: S311
             repeat = args.get("repeat", 1)
             if move_name not in self._dances:
