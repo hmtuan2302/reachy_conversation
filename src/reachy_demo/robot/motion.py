@@ -161,14 +161,21 @@ class Motion:
             self._task = asyncio.create_task(self._run())
         return None
 
-    def stop(self) -> None:
+    def stop(self, neutral: bool = True) -> None:
         """Drop queued moves. A dance ends now and the head eases to neutral; a short move
-        in progress finishes (at most 1 s), so short moves always end on their fixed angle."""
+        in progress finishes (at most 1 s), so short moves always end on their fixed angle.
+        `neutral=False` leaves the head where the long move left it (a move that already
+        slowed to a halt itself, like the search sweep)."""
         self._queue.clear()
         if self._current and self._current.long:
             self._abort = True
             self._current = None  # free at once: a new move in the same reply is accepted
-            self._queue.append(goto("neutral", NEUTRAL, EASE_S))
+            if neutral:
+                self._queue.append(goto("neutral", NEUTRAL, EASE_S))
+
+    async def settled(self) -> None:
+        """Wait until every queued move has played (returns at once when idle)."""
+        await self._idle.wait()
 
     async def close(self, timeout_s: float = 3.0) -> None:
         """Exit: end whatever runs now, ease to neutral, stop the loop."""

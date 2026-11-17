@@ -146,6 +146,81 @@ class ObjectDetector:
         return decode(raw, scale, label, size)
 
 
+def detect_tiled(detector: ObjectDetector, bgr: Frame, label: str) -> list[Detection]:
+    """Detect on the whole frame and on 3x3 overlapping tiles (each 40% of the frame), so small
+    far objects reach the detector big enough. 10 detector runs, ~130 ms on the laptop.
+
+    Checked 2026-11-17 (YOLOX-nano, 1280x720): the whole frame alone missed objects under
+    ~80x140 px; 2x2 tiles found them from ~67x117 px, 3x3 from ~48x84 px.
+    """
+    import cv2
+
+    h, w = bgr.shape[:2]
+    th, tw = int(h * 0.4), int(w * 0.4)
+    found = list(detector.detect(bgr, label))
+    for y0 in np.linspace(0, h - th, 3).astype(int):
+        for x0 in np.linspace(0, w - tw, 3).astype(int):
+            tile = np.ascontiguousarray(bgr[y0 : y0 + th, x0 : x0 + tw])
+            for d in detector.detect(tile, label):
+                x, y, bw, bh = d.box
+                found.append(Detection(d.label, d.score, (x + x0, y + y0, bw, bh)))
+    if not found:
+        return []
+    keep = cv2.dnn.NMSBoxes([list(d.box) for d in found], [d.score for d in found], 0.0, 0.45)
+    return [found[i] for i in np.asarray(keep).ravel()]
+
+
+async def choose(ask: Ask, frame: Frame, found: list[Detection], target: str) -> Detection | None:
+    """Ask the vision model which numbered box is `target`; None if none is, or it can't tell.
+
+    With one box this is a yes/no check, which weeds out look-alikes (a remote for a phone).
+    """
+    import cv2
+
+    marked = frame.copy()
+    for i, d in enumerate(found, 1):
+        x, y, w, h = map(int, d.box)
+        cv2.rectangle(marked, (x, y), (x + w, y + h), (0, 255, 0), 3)
+        cv2.putText(marked, str(i), (x + 4, y + 30), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+    ok, jpeg = cv2.imencode(".jpg", marked)
+    if not ok:
+        return None
+    question = (
+        f"Green numbered boxes mark objects. Which box contains {target}? "
+        "Answer with the number only, or 0 if none."
+    )
+    try:
+        answer = await ask(jpeg.tobytes(), question)
+    except Exception as e:  # noqa: BLE001 - fail small: the caller falls back
+        log.warning("vision pick failed: %s", e)
+        return None
+    m = re.search(r"\d+", answer)
+    n = int(m.group()) if m else 0
+    return found[n - 1] if 1 <= n <= len(found) else None
+
+
+async def describe_box(ask: Ask, frame: Frame, d: Detection) -> str | None:
+    """One short sentence about the object in `d`'s box, or None if the vision model fails."""
+    import cv2
+
+    marked = frame.copy()
+    x, y, w, h = map(int, d.box)
+    cv2.rectangle(marked, (x, y), (x + w, y + h), (0, 255, 0), 3)
+    ok, jpeg = cv2.imencode(".jpg", marked)
+    if not ok:
+        return None
+    question = (
+        "Describe the object in the green box in one short sentence: what it is, its colour, "
+        "and what it is on or next to. Do not mention the box."
+    )
+    try:
+        answer = (await ask(jpeg.tobytes(), question)).strip()
+    except Exception as e:  # noqa: BLE001 - fail small: report without a description
+        log.warning("vision describe failed: %s", e)
+        return None
+    return answer or None
+
+
 class ObjectSource:
     """One object: picked once, then tracked. `read` runs in a worker thread, one at a time."""
 
@@ -188,38 +263,11 @@ class ObjectSource:
             return f"not_visible: no {label} in view"
         pick = max(found, key=lambda d: d.score)
         if len(found) > 1 and self._ask is not None:
-            pick = await self._choose(frame, found, target) or pick
+            pick = await choose(self._ask, frame, found, target) or pick
         self._label, self._width = label, frame.shape[1]
         await asyncio.to_thread(self._start_tracker, frame, pick.box)
         log.info("tracking %s (%s, %d candidates)", target, label, len(found))
         return None
-
-    async def _choose(self, frame: Frame, found: list[Detection], target: str) -> Detection | None:
-        """Ask the vision model which numbered box is `target`; None if it can't tell."""
-        import cv2
-
-        marked = frame.copy()
-        for i, d in enumerate(found, 1):
-            x, y, w, h = map(int, d.box)
-            cv2.rectangle(marked, (x, y), (x + w, y + h), (0, 255, 0), 3)
-            cv2.putText(
-                marked, str(i), (x + 4, y + 30), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3
-            )
-        ok, jpeg = cv2.imencode(".jpg", marked)
-        if not ok or self._ask is None:
-            return None
-        question = (
-            f"Green numbered boxes mark objects. Which box contains {target}? "
-            "Answer with the number only, or 0 if none."
-        )
-        try:
-            answer = await self._ask(jpeg.tobytes(), question)
-        except Exception as e:  # noqa: BLE001 - fail small: fall back to the best detection
-            log.warning("vision pick failed: %s", e)
-            return None
-        m = re.search(r"\d+", answer)
-        n = int(m.group()) if m else 0
-        return found[n - 1] if 1 <= n <= len(found) else None
 
     def _half(self) -> Frame | None:
         """Half-size frame: the tracker runs 2x faster, the detector input is 416 px anyway."""

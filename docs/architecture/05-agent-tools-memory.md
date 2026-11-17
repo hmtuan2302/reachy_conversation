@@ -30,7 +30,7 @@ function_call(name, args, call_id)
 | `play_move` | `name` (enum of moves.py) | yes | 5 s | Expressive move on request ("dance", "nod"). |
 | `express` | `mood` (enum) | no | 2 s | Mood offset matching the reply tone (F3). The model calls it itself; it's not a user command. |
 | `look_at` | `target` ("me" / object label) | yes | 2 s to start | Starts `LookAt` / switches to FaceTrack on the owner (F4). |
-| `find_object` | `query`, `coco_hint?` | yes | 15 s | Search behaviour + cloud confirm + memory sighting (F5). |
+| `find_object` | `target`, `coco_class` (80 COCO + `none`) | yes | 15 s | Search behaviour (14 views, tiled YOLOX) + cloud confirm (F5). Built 2026-11-17 in `attention/search.py`; memory sighting not built yet. |
 | `mimic` | `on: bool` | yes | 1 s | Start/stop Mimic (F6). |
 | `look_at_pointed` | `mode ∈ {identify, read_text}` | yes | 10 s | PointFollow → crop → `describe()` (F10). |
 | `look_around` | — | no | 8 s | Describe the scene (wide frame → `describe`). Harmless, so open to all. |

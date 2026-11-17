@@ -31,6 +31,7 @@ from reachy_demo.agent.llm import (
     chat_stream,
 )
 from reachy_demo.agent.tools import Toolbox, ToolSet, camera, head, track
+from reachy_demo.agent.tools import find as find_tools
 from reachy_demo.agent.tools import memory as memory_tools
 from reachy_demo.agent.tools import mimic as mimic_tools
 from reachy_demo.agent.tools import owner as owner_tools
@@ -38,6 +39,7 @@ from reachy_demo.agent.tools import sound as sound_tools
 from reachy_demo.agent.tools import voice as voice_tools
 from reachy_demo.attention.follow import Follow
 from reachy_demo.attention.mimic import Mimic
+from reachy_demo.attention.search import MAX_SWEEP_S, MIN_SWEEP_S, SWEEP_S, Search
 from reachy_demo.audio.player import PlayerError
 from reachy_demo.audio.sound_events import DEFAULT_LOUD_RMS, SoundEvents, with_sound
 from reachy_demo.audio.vad import EnergyVAD
@@ -428,6 +430,18 @@ def run(args: argparse.Namespace) -> int:
                     seen,
                 )
                 prompt += f" {track.OBJECT_PROMPT}"
+                sweep_s = search_sweep_from_env()
+                if sweep_s is None:
+                    return 2
+                look = Search(
+                    motion,
+                    robot.grab_frame,
+                    partial(ObjectDetector, object_model),
+                    ask,
+                    sweep_s=sweep_s,
+                )
+                sets.append(find_tools.FindTools(look, speaker=mode.speaker))
+                prompt += f" {find_tools.PROMPT}"
                 face_model = Path(os.environ.get("MIMIC_MODEL", "").strip() or MIMIC_MODEL)
                 copy = Mimic(
                     motion,
@@ -507,6 +521,23 @@ def speaker_gate_from_env() -> SpeakerGate | None:
         return None
     print(f"  (owner mode: available, high {high} low {low})")
     return SpeakerGate(embed, voice, high, low)
+
+
+def search_sweep_from_env() -> float | None:
+    """find_object's sweep length (SEARCH_SWEEP_S), or None after printing a config error."""
+    raw = os.environ.get("SEARCH_SWEEP_S", "").strip()
+    try:
+        value = float(raw) if raw else SWEEP_S
+    except ValueError:
+        value = -1.0
+    if not MIN_SWEEP_S <= value <= MAX_SWEEP_S:
+        print(
+            f"config error: SEARCH_SWEEP_S must be {MIN_SWEEP_S:g}-{MAX_SWEEP_S:g} seconds, "
+            f"got {raw!r}",
+            file=sys.stderr,
+        )
+        return None
+    return value
 
 
 def sound_from_env() -> SoundEvents | Literal[False]:
