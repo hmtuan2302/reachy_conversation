@@ -57,7 +57,7 @@ Small talk and robot commands ("hi", "thanks", "turn left", "dance") are logged 
 
 **Your description.** When you tell Reachy about yourself (who you are, your personality, likes and dislikes), it saves each as a fact and then rewrites your `description` in `people` from all of those facts: up to 3 sentences, such as "Tuan is a calm, curious software engineer who loves black coffee and is a bit of a night owl. Tuan hates crowded places." It goes at the top of Reachy's memory each session. Plans, pets and family don't change it. Correct a fact ("actually I prefer tea now") and the description follows at the next rewrite.
 
-**Other people.** When a guest talks about themselves, only facts are saved, under the guest, never under you. Guests get no name change, follow-ups or description. Until speaker ID exists, everyone counts as the owner, so for now everything goes to you.
+**Other people.** When a guest talks about themselves, only facts are saved, under the guest, never under you. Guests get no name change, follow-ups or description. Guests are only told apart while [owner mode](agent.md#owner-mode-speaker-verification) is on, and then their turns are dropped. So for now everything goes to you.
 
 **Changes are tracked, not overwritten.** "I moved to Hanoi" closes the old "lives in Saigon" fact instead of deleting it, so "where did I live before?" still works.
 

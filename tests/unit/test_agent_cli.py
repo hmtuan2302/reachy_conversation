@@ -103,6 +103,7 @@ def test_run_wires_transcripts_into_deepseek(
     monkeypatch.setattr(cli, "transcribe_stream", fake_transcribe)
     monkeypatch.setattr(cli, "chat_events", fake_chat)
     monkeypatch.setattr(cli, "source_from_args", lambda _a: _turns())
+    monkeypatch.setattr(cli, "speaker_gate_from_env", lambda: None)  # no real voiceprint
     assert cli.run(_args()) == 0
     assert capsys.readouterr().out == "you: Hello.\nbot: Hi!\n"
     assert seen["hf"] == "hf_x" and seen["api_key"] == "sk-x"

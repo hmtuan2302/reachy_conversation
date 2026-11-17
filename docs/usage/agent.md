@@ -292,9 +292,57 @@ bot: Ok, mình quay lại giọng cũ nhé.                       ← back to th
 - While `data/voice/clone.wav` exists, every answer is spoken in that voice, even after a restart. "Stop using my voice" calls `stop_cloning_voice`, which deletes the file. Deleting the file by hand does the same.
 - The first answer in a new voice takes about 1.5 s longer, while VieNeu encodes the clip. After that it's as fast as a preset voice.
 - Use a headset: if the speaker's sound reaches the mic, Reachy's own voice can end up in the sample.
-- Owner-only (like memory changes). Until speaker ID exists, everyone counts as the owner.
+- Owner-only (like memory changes). Everyone counts as the owner unless [owner mode](#owner-mode-speaker-verification) is on.
 - To test without recording yourself, set a fixed WAV in `.env`: `CLONE_AUDIO=data/OSR_us_000_0010_8k.wav`. Then "clone my voice" uses that file instead of the mic, so it also works with `--type`, and "stop cloning" turns it off as usual. Any sample rate works, and VieNeu uses up to 8 s. Leave it empty to clone your real voice from the mic.
 - Not available with Gemini TTS or `--no-speak`. With `--type` and no `CLONE_AUDIO`, there's no mic sample, so it answers "heard 0 s".
+
+## Owner mode (speaker verification)
+
+Say "only follow my command" and Reachy obeys only your voice. Say "stop following only me" and everyone counts again. Both work in any wording, Vietnamese or English.
+
+```
+  (voice: owner 0.71)
+you: chỉ nghe lệnh của tôi thôi
+bot: Được rồi, từ giờ mình chỉ nghe lệnh của bạn.
+  (voice: guest 0.12)
+  (ignored guest: dance for me)                  ← no answer
+  (voice: unsure 0.41)
+  (unsure: turn to me)                            ← Reachy: "I'm not sure that's you, please say it again."
+```
+
+**Setup (once).** Install the speaker extra, download the CAM++ model (28 MB) and enroll your voice from a WAV of you talking (at least 3 s; 10 s or more is better):
+
+```bash
+uv sync --extra speaker
+curl -L -o models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx \
+  https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx
+uv run reachy-demo enroll --file data/my_voice1.wav --test data/my_voice_2.wav data/other.wav
+```
+
+`enroll` saves `data/voice/owner.npy`. It prints a self-score and a score per `--test` file: your other clips should be well above `SPEAKER_HIGH`, other people well below `SPEAKER_LOW`. Repeat `--file` to enroll from several clips. Enroll with the mic you'll use live (robot mic or Windows `--stdin`): a different mic lowers your score.
+
+```bash
+# SPEAKER_MODEL=...      # optional: default models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx
+# SPEAKER_HIGH=0.5       # optional: score >= this is you
+# SPEAKER_LOW=0.3        # optional: below this is a guest; in between, Reachy asks again
+```
+
+At start the agent prints `(owner mode: available, high 0.5 low 0.3)`, or `(owner mode: off: <reason>)`. Off only means owner mode can't be turned on. Everything else works.
+
+**How it works.**
+- Each sentence's speech (up to the last 8 s) is scored against your voiceprint on the CPU, in about 50 ms, and the score prints as `(voice: …)`.
+- Owner mode is off by default: every turn is answered, as before.
+- While owner mode is on:
+  - Guest sentences are dropped before the LLM sees them. Reachy doesn't answer, and a guest's "stop" can't interrupt you.
+  - Unsure sentences (between the two thresholds, or under 1 s of speech) get "I'm not sure that's you, please say it again." A face check for this case is planned.
+  - `dance` and `look_toward_sound` refuse anyone but you.
+- Only a voice scored as you can switch owner mode, on or off.
+- Owner mode resets to off when the agent restarts.
+- With `--type` there's no voice to check: typed turns always count as you, and the `owner_mode` tool isn't offered.
+
+**Tuning.** Watch the `(voice: …)` lines. Measured on 2026-11-17 with `my_voice1.wav` enrolled: your second clip 0.63–0.74, another voice 0.05–0.27.
+- You get `unsure` too often: lower `SPEAKER_HIGH`, or enroll again with the live mic.
+- A guest scores above `SPEAKER_LOW`: raise it.
 
 ## Debug recording (saved on exit)
 

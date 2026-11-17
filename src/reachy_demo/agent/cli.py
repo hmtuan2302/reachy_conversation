@@ -18,6 +18,7 @@ from functools import partial
 from pathlib import Path
 from typing import Literal, TextIO
 
+import numpy as np
 from dotenv import find_dotenv, load_dotenv
 
 from reachy_demo.agent.agent import SYSTEM_PROMPT, Agent
@@ -31,6 +32,7 @@ from reachy_demo.agent.llm import (
 )
 from reachy_demo.agent.tools import Toolbox, ToolSet, camera, head
 from reachy_demo.agent.tools import memory as memory_tools
+from reachy_demo.agent.tools import owner as owner_tools
 from reachy_demo.agent.tools import sound as sound_tools
 from reachy_demo.agent.tools import voice as voice_tools
 from reachy_demo.audio.player import PlayerError
@@ -40,7 +42,7 @@ from reachy_demo.memory.briefing import DEFAULT_MEMORY_TOKENS
 from reachy_demo.memory.consolidate import Consolidator
 from reachy_demo.memory.embed import load_embedder
 from reachy_demo.memory.session import MemorySession
-from reachy_demo.memory.store import OWNER, MemoryStore
+from reachy_demo.memory.store import OWNER, MemoryStore, Speaker
 from reachy_demo.memory.vectors import VectorIndex
 from reachy_demo.ops.tokens import est_tokens
 from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
@@ -48,6 +50,14 @@ from reachy_demo.robot.adapter import connect_robot
 from reachy_demo.robot.dances import load_dances
 from reachy_demo.robot.motion import Motion
 from reachy_demo.voice.speak_cli import speaker_from_env, uses_gemini
+from reachy_demo.voice.speaker_id import (
+    DEFAULT_HIGH,
+    DEFAULT_LOW,
+    VOICEPRINT,
+    SpeakerGate,
+    load_sherpa_embed,
+)
+from reachy_demo.voice.speaker_id import DEFAULT_MODEL as SPEAKER_MODEL
 from reachy_demo.voice.transcribe import transcribe_stream
 from reachy_demo.voice.transcribe_cli import (
     add_source_args,
@@ -216,11 +226,14 @@ async def _tap(
     vad: EnergyVAD,
     speech: voice_tools.SpeechBuffer | None = None,
     sound: SoundEvents | None = None,
+    gate: SpeakerGate | None = None,
 ) -> AsyncIterator[bytes]:
     async for chunk in chunks:
         speaking = vad.feed(chunk)
         if speech:
             speech.feed(chunk, speaking)
+        if gate:
+            gate.feed(chunk, speaking)
         if sound:
             sound.feed(chunk, speaking, time.monotonic())
         yield chunk
@@ -276,10 +289,13 @@ def run(args: argparse.Namespace) -> int:
     sound = sound_from_env() if args.robot else None
     if sound is False:
         return 2
+    # Typed turns have no voice to check: they count as the owner.
+    gate = None if source is None else speaker_gate_from_env()
+    mode = owner_tools.OwnerMode(gate)
     if source is None:
         turns = typed_turns(sys.stdin)
     else:
-        audio, rec = recorded(args, _tap(source, vad, speech, sound or None))
+        audio, rec = recorded(args, _tap(source, vad, speech, sound or None, gate))
         turns = transcribe_stream(audio, hf_token=keys["HF_TOKEN"])
     speak = (
         None
@@ -302,22 +318,25 @@ def run(args: argparse.Namespace) -> int:
             base_url=base_url,
         ),
     )
-    memory = memory_from_env(keys["DEEPSEEK_API_KEY"], base_url, memory_max)
+    turns = owner_tools.gated_turns(turns, mode, sys.stdout, say=speak)
+    memory = memory_from_env(keys["DEEPSEEK_API_KEY"], base_url, memory_max, mode.speaker)
     push, push_line = push_status(memory)
     if memory:
         print(f"  (memory push: {push_line})")
     sets: list[ToolSet] = []
     prompt = SYSTEM_PROMPT
+    if source is not None:  # owner mode needs a voice; typed turns are always the owner
+        sets.append(owner_tools.OwnerTools(mode))
+        prompt += f" {owner_tools.PROMPT}"
     if memory:
         session, tools_ = memory
         sets.append(tools_)
         prompt += f" {memory_tools.PROMPT}"
     if speech:
-        # shortcut: everyone counts as the owner until speaker ID (M9) exists, same as memory
         sample = os.environ.get("CLONE_AUDIO", "").strip()
         sets.append(
             voice_tools.VoiceTools(
-                speech, speaker=lambda: OWNER, sample=Path(sample) if sample else None
+                speech, speaker=mode.speaker, sample=Path(sample) if sample else None
             )
         )
         prompt += f" {voice_tools.PROMPT}"
@@ -363,11 +382,11 @@ def run(args: argparse.Namespace) -> int:
                 print(f"robot error: cannot connect to {keys['ROBOT_HOST']}: {e}", file=sys.stderr)
                 return 1
             motion = Motion(robot.set_pose, on_error=lambda e: print(f"  (head error: {e})"))
-            head_tools = head.HeadTools(motion, load_dances())
+            head_tools = head.HeadTools(motion, load_dances(), speaker=mode.speaker)
             prompt += f" {head.PROMPT}"
             sets.append(head_tools)
             assert sound  # made above for --robot
-            sets.append(sound_tools.SoundTools(sound, motion))
+            sets.append(sound_tools.SoundTools(sound, motion, speaker=mode.speaker))
             prompt += f" {sound_tools.PROMPT}"
             if robot.has_camera:
                 ask, label = vision_asker(vision, keys, base_url)
@@ -403,6 +422,36 @@ def run(args: argparse.Namespace) -> int:
 VISION_PROVIDERS = ("hf", "deepseek")
 DEFAULT_CONTEXT_TOKENS = 8000
 PUSH_RESERVE_TOKENS = 200  # up to 3 related-memory lines of 240 chars, sent with the user turn
+
+
+def speaker_gate_from_env() -> SpeakerGate | None:
+    """Owner mode's voice check (SPEAKER_MODEL, SPEAKER_HIGH, SPEAKER_LOW, the enrolled
+    voiceprint), or None after printing why it is off. Never raises: no gate only means
+    owner mode can't be turned on."""
+    limits = {}
+    for name, default in (("SPEAKER_HIGH", DEFAULT_HIGH), ("SPEAKER_LOW", DEFAULT_LOW)):
+        raw = os.environ.get(name, "").strip()
+        try:
+            limits[name] = float(raw) if raw else default
+        except ValueError:
+            print(f"  (owner mode: off: {name} must be a number, got {raw!r})")
+            return None
+    high, low = limits["SPEAKER_HIGH"], limits["SPEAKER_LOW"]
+    if not -1 <= low <= high <= 1:
+        print(f"  (owner mode: off: need -1 <= SPEAKER_LOW <= SPEAKER_HIGH <= 1, got {low} {high})")
+        return None
+    if not VOICEPRINT.is_file():
+        print(f"  (owner mode: off: no {VOICEPRINT}; run reachy-demo enroll --file YOUR.wav)")
+        return None
+    model = Path(os.environ.get("SPEAKER_MODEL", "").strip() or SPEAKER_MODEL)
+    try:
+        embed = load_sherpa_embed(model)
+        voice = np.load(VOICEPRINT)
+    except (ImportError, OSError, ValueError) as e:  # FileNotFoundError is an OSError
+        print(f"  (owner mode: off: {e})")
+        return None
+    print(f"  (owner mode: available, high {high} low {low})")
+    return SpeakerGate(embed, voice, high, low)
 
 
 def sound_from_env() -> SoundEvents | Literal[False]:
@@ -456,7 +505,10 @@ def _positive_int(name: str, default: int) -> int | None:
 
 
 def memory_from_env(
-    api_key: str, base_url: str, memory_max_tokens: int = DEFAULT_MEMORY_TOKENS
+    api_key: str,
+    base_url: str,
+    memory_max_tokens: int = DEFAULT_MEMORY_TOKENS,
+    speaker: Callable[[], Speaker] = lambda: OWNER,
 ) -> tuple[MemorySession, memory_tools.MemoryTools] | None:
     """Memory (MEMORY_DB, MEMORY_MODEL), or None when MEMORY=off or the DB can't be opened."""
     if os.environ.get("MEMORY", "").strip().lower() in ("off", "0", "false", "no"):
@@ -490,7 +542,7 @@ def memory_from_env(
     )
     print(f"  (memory on: {path})")
     tools = memory_tools.MemoryTools(
-        store, consolidator, speaker=lambda: OWNER, embedder=embedder, index=index
+        store, consolidator, speaker=speaker, embedder=embedder, index=index
     )
     return session, tools
 
