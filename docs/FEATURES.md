@@ -4,7 +4,7 @@ A one-page summary of everything `reachy-demo` can do. Details, setup and errors
 
 **Keep this file current:** every commit that adds or changes a feature updates its row here, and its usage doc.
 
-Last updated: 2026-11-17 (branch `feat/doa-speaker-verification`, commit `1f0d9bc`).
+Last updated: 2026-11-17 (branch `main`, after merging `feat/doa-speaker-verification`).
 
 ## Commands
 
@@ -43,5 +43,6 @@ From the roadmap in [src/CLAUDE.md](../src/CLAUDE.md): greeting, emotion-aware r
 
 | Branch | Holds |
 |---|---|
-| `main` | Features 1–10, 12 |
-| `feat/doa-speaker-verification` | `main` + features 11 (sound direction) and 13 (owner mode) |
+| `main` | Features 1–13 |
+| `feat/doa-speaker-verification` | Merged into `main` |
+| `feat/video-tracking` | `main` + video tracking (in progress) |
