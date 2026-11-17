@@ -27,7 +27,7 @@ Scope: what the state of the art in robot and agent memory says, which ideas fit
 | Multiple people in the room, owner/guest gate exists | Memory must be **per person**, with owner-only writes and guest data that expires. |
 | Home/office environment | Strong privacy needs. Data stays local by default. |
 
-Already in the repo (`docs/architecture/05-agent-tools-memory.md`): SQLite `facts`, `sightings` (label, where_text, yaw, pitch, seen), `people` (owner/guest); `remember / recall / forget` tools; `recall` is keyword + recency; prompt injects ≤ 15 facts and ≤ 10 object locations. The reference app (`reference/conversation_app_tools/remember.py`, `forget.py`) has the same tools. This report extends that design; it does not replace it.
+Already designed (`docs/architecture/05-agent-tools-memory.md`; **not built** as of 2026-11-17: `src/reachy_demo/memory/` is empty, and there is no owner gate or `enroll` yet, M8): SQLite `facts`, `sightings` (label, where_text, yaw, pitch, seen), `people` (owner/guest); `remember / recall / forget` tools; `recall` is keyword + recency; prompt injects ≤ 15 facts and ≤ 10 object locations. The reference app (`reference/conversation_app_tools/remember.py`, `forget.py`) has the same tools. This report extends that design; it does not replace it.
 
 ---
 
@@ -49,7 +49,7 @@ Already in the repo (`docs/architecture/05-agent-tools-memory.md`): SQLite `fact
 - The four-memory split and the short-term / long-term grouping.
 - The **ADD/UPDATE/DELETE/NOOP consolidator constrained to retrieved candidates**. This is the single most useful pattern: it stops duplicate facts and handles "I moved to Hanoi" overwriting "lives in Saigon".
 - Memory-specific query generation (cheap version: one LLM call that returns `{people, objects, topics, time}` instead of four calls).
-- Episode summaries written at session end, including failures.
+- Episode summaries written at session end, including failures. For Reachy this becomes two kinds: conversation episodes (Phase 1, a session ends after 10 min of silence or on exit) and **task episodes** for multi-step tools such as `find_object` (Phase 2, item 2.6).
 - The integration step for spatial relations (old + new → revised), applied to object sightings.
 
 **Leave.** The per-step Actor–Critic loop (Reachy's tasks are short and conversational), pickle-serialized graphs (untrusted-input risk; their own docs warn about it), Chroma + LangChain (heavy deps for a lean repo), the ALFRED action vocabulary.
@@ -142,7 +142,7 @@ Five memory types. Each answers one question.
 | **Working** | What is happening right now? | Last N turns + live `WorldState` + turn summary | Session | Agent loop | Every turn (prompt) |
 | **Person** | Who is this, and what do I know about them? | Profile: name, face/voice embeddings, relations, preferences, traits, last seen, mood history | Owner: permanent. Guest: session or 30 days, opt-in | Identity gate + consolidator | Every turn for the current speaker (core block) |
 | **Semantic (facts)** | What is true about the world/people? | Atomic fact with subject, predicate-ish text, confidence, `valid_from/valid_to`, source | Permanent until invalidated | Consolidator (ADD/UPDATE/DELETE/NOOP) | `recall`, prompt top facts |
-| **Episodic** | What happened, when? | (a) conversation episode summary; (b) visual event caption; (c) notable moment | Permanent, compressed with age | End-of-session summarizer, perception captioner | `recall` by time/person/topic |
+| **Episodic** | What happened, when? | (a) conversation episode summary; (b) task attempt (goal, steps, outcome, failure reason); (c) visual event caption; (d) notable moment | Permanent, compressed with age | End-of-session summarizer, multi-step tools on finish, perception captioner | `recall` by time/person/topic |
 | **Spatial (object/place)** | Where is X / what is usually where? | Sighting: label, embedding, yaw/pitch, box, landmark, thumbnail, time, confidence | Latest per object kept; history compressed | `find_object`, idle glances, captioner | `find_object`, `recall` |
 | **Procedural (skills/routines)** | How do I do X for this person / when does Y usually happen? | Routine (time pattern + action), learned preference for a behaviour, successful tool sequence | Permanent, revised on feedback | Reflection job | Scheduler, planner prompt |
 
@@ -248,7 +248,7 @@ relations(id PK, src_kind, src_id, rel, dst_kind, dst_id, valid_from, valid_to, 
   -- person–person ("sister_of"), person–object ("owns"), object–place ("usually_on")
 
 -- what happened
-episodes(id PK, kind CHECK(kind IN ('conversation','visual','moment')),
+episodes(id PK, kind CHECK(kind IN ('conversation','task','visual','moment')),
          start, end, person_ids_json, summary, topics_json, importance, emotion_json,
          follow_ups_json,                         -- ["ask how the exam went (due 2026-11-21)"]
          compressed_level INT DEFAULT 0)
@@ -344,6 +344,22 @@ Implementation: filter by person/time/place in SQL → hybrid score (BM25 + cosi
 
 Each phase is shippable alone. Acceptance tests are spoken scenarios plus a scripted test set (§8).
 
+### What each phase builds, per memory type (§4)
+
+| Memory | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
+|---|---|---|---|---|
+| **Working** | Briefing block (≤ 400 tokens) in every prompt; last-N turns already exist in `Agent` | Live `WorldState` (from the perception milestones, not memory) | — | — |
+| **Person** | Owner profile: name, preferences, settings. Face/voice embeddings + identity only if Phase 1 includes the gate (open decision) | Ownership ("my mug" = person → object) | Guest expiry, retention settings | — |
+| **Semantic (facts)** | `facts` with `valid_from/valid_to` + `source`; ADD/UPDATE/INVALIDATE/NOOP consolidator; hybrid `recall`, `forget` | Usual places → `relations(object, usually_on, landmark)` | Decay, dedupe/merge, reflections | Memory-based safety/privacy rules |
+| **Episodic** | (a) Conversation summary at session end + follow-ups | Task episodes (`kind='task'`) from `find_object`, success or failure; keyframes for re-checking what was seen | (c) Idle-glance visual captions (opt-in); compress old episodes daily/weekly | Daily/weekly recap |
+| **Spatial** | — | All: sightings as rays, landmarks, memory-aware `find_object` | Thumbnail retention | — |
+| **Procedural** | — | — | — | All: reminders, routines (with consent), behaviour preferences, voice macros |
+
+Gaps (no phase builds these yet):
+- **Mood history** (Person): needs the emotion feature (F3) first.
+- **Turn summary** (Working): skipped; the last 10 raw turns cover a session.
+- **Person–person relations** ("Mai is your sister"): stored as plain `facts` (category `relation`) in Phase 1; `relations` rows and graph lookups come later.
+
 ### Phase 1 — People, facts, episodes (foundation)
 | # | Feature | Notes |
 |---|---|---|
@@ -366,6 +382,7 @@ Each phase is shippable alone. Acceptance tests are spoken scenarios plus a scri
 | 2.3 | Object ownership and custom objects ("this is my lucky coin" + thumbnail) | Fix "my mug" failures. |
 | 2.4 | Keyframe verification on demand | STaR. |
 | 2.5 | Usual-place mining; "it's not where you usually leave it" | |
+| 2.6 | Task episodes: when a multi-step tool (`find_object` first) finishes, write `episodes(kind='task')` with goal, steps tried, outcome and failure reason. `find_object` reads recent failed attempts for the same object before searching. | Template from the tool result, no LLM call. Single-step moves are not logged. RoboMemory episodic memory. |
 | **Acceptance** | "Where is my phone?" answered from memory in ≤ 3 s when seen < 10 min ago; F5 full search still ≤ 15 s; correct landmark ≥ 80%. | |
 
 ### Phase 3 — Consolidation, reflection, forgetting
