@@ -69,3 +69,35 @@ async def test_keeps_generating_while_consumer_is_busy(monkeypatch: pytest.Monke
     await anext(stream)
     assert await asyncio.to_thread(made.wait, 2.0)
     assert [c async for c in stream] == [b"\x00\x00"]
+
+
+def test_buffer_needed_covers_the_shortfall() -> None:
+    # 7 s to say, 1 s made, model at 0.8x real time: it falls 0.25 s behind per second left
+    assert vieneu_tts.buffer_needed(7.0, 1.0, 0.8) == pytest.approx(6 * 0.25 + vieneu_tts.MARGIN_S)
+
+
+def test_buffer_needed_fast_model_needs_only_the_margin() -> None:
+    assert vieneu_tts.buffer_needed(7.0, 0.3, 1.5) == vieneu_tts.MARGIN_S
+    assert (
+        vieneu_tts.buffer_needed(2.0, 3.0, 0.5) == vieneu_tts.MARGIN_S
+    )  # text was longer than guessed
+
+
+async def test_slow_model_holds_audio_until_buffered(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    chunk = np.zeros(480, dtype=np.float32)  # 0.01 s of 48 kHz audio
+    yielded_at: list[float] = []
+
+    class Fake:  # 0.01 s of audio every 0.02 s: half real time, ~0.5 s of speech
+        def infer_stream(self, text: str, **kw: Any) -> Any:
+            for _ in range(50):
+                time.sleep(0.02)
+                yield chunk
+
+    monkeypatch.setattr(vieneu_tts, "_model", Fake)
+    t0 = time.monotonic()
+    async for _ in vieneu_tts.vieneu_stream("x" * 9):  # guessed 0.5 s of speech
+        yielded_at.append(time.monotonic() - t0)
+    assert len(yielded_at) == 50  # nothing lost
+    assert yielded_at[0] > 0.5  # held back until the buffer could cover the slow model
