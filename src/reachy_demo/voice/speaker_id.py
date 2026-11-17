@@ -8,6 +8,7 @@ The embedding model is injected (`Embed`), so this module needs no model library
 
 from __future__ import annotations
 
+import math
 import wave
 from collections import deque
 from collections.abc import Callable
@@ -21,9 +22,10 @@ KEEP_S = 8.0  # speech kept since the last turn; older speech (untranscribed sid
 MIN_S = 1.0  # shorter speech is too little to judge
 DEFAULT_MODEL = Path("models/3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx")
 VOICEPRINT = Path("data/voice/owner.npy")
-# Measured 2026-11-17, enrolled on my_voice1.wav: filled in by Task 2 measurement.
+# Measured 2026-11-17, enrolled on my_voice1.wav (CAM++): owner my_voice_2.wav 0.73, another
+# voice 0.05, mic_check.wav 0.24. 0.5 is CAM++'s usual operating point; tune on the venue mic.
 DEFAULT_HIGH = 0.5
-DEFAULT_LOW = 0.35
+DEFAULT_LOW = 0.3
 
 Embed = Callable[[np.ndarray, int], np.ndarray]  # float32 samples in [-1, 1], rate -> embedding
 Verdict = Literal["owner", "guest", "unsure"]
@@ -103,9 +105,26 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
     return x.astype(np.float32), rate
 
 
+def to_16k(x: np.ndarray, rate: int) -> np.ndarray:
+    """Resample to 16 kHz: zero-stuff by L, windowed-sinc low-pass, keep every M-th sample.
+
+    Scores match sherpa-onnx's own resampler within 0.03 on the test clips (24 and 48 kHz).
+    """
+    if rate == 16_000:
+        return x
+    g = math.gcd(16_000, rate)
+    up, down = 16_000 // g, rate // g
+    m = max(up, down)
+    n = np.arange(-16 * m, 16 * m + 1)
+    h = np.sinc(n / m) * np.hamming(len(n)) / m
+    y = np.zeros(len(x) * up, dtype=np.float32)
+    y[::up] = x * up
+    return np.convolve(y, h, "same")[::down].astype(np.float32)
+
+
 def load_sherpa_embed(model: Path) -> Embed:
     """The CAM++ extractor as an `Embed`. ImportError without sherpa-onnx, FileNotFoundError
-    without the model file. It resamples to 16 kHz itself."""
+    without the model file."""
     if not model.is_file():
         raise FileNotFoundError(f"speaker model not found: {model}")
     import sherpa_onnx  # optional `speaker` extra
@@ -116,7 +135,9 @@ def load_sherpa_embed(model: Path) -> Embed:
 
     def embed(samples: np.ndarray, rate: int) -> np.ndarray:
         stream = extractor.create_stream()
-        stream.accept_waveform(rate, np.ascontiguousarray(samples, dtype=np.float32))
+        # resample here: sherpa's own resampler logs a line to stderr on every call
+        x = to_16k(np.asarray(samples, dtype=np.float32), rate)
+        stream.accept_waveform(16_000, np.ascontiguousarray(x))
         stream.input_finished()
         return np.array(extractor.compute(stream))
 

@@ -11,7 +11,7 @@ from reachy_demo.agent import cli as agent_cli
 from reachy_demo.agent import memory_eval
 from reachy_demo.config import Config, ConfigError
 from reachy_demo.ops.logging import configure_logging
-from reachy_demo.voice import speak_cli, transcribe_cli
+from reachy_demo.voice import enroll_cli, speak_cli, transcribe_cli
 
 log = logging.getLogger("reachy_demo")
 
@@ -25,6 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     agent_cli.add_parser(sub)
     speak_cli.add_parser(sub)
     memory_eval.add_parser(sub)
+    enroll_cli.add_parser(sub)
     args = parser.parse_args(argv)
     if args.command == "transcribe":
         return transcribe_cli.run(args)  # needs only HF_TOKEN, not the robot config
@@ -32,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
         return speak_cli.run(args)  # needs only GEMINI_API_KEY
     if args.command == "agent":
         return agent_cli.run(args)  # HF_TOKEN + DEEPSEEK_API_KEY, not the robot config
+    if args.command == "enroll":
+        return enroll_cli.run(args)  # local model only, no keys
     if args.command == "memory":
         return memory_eval.run(args)  # DEEPSEEK_API_KEY only
 

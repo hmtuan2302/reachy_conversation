@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from reachy_demo.voice.speaker_id import KEEP_S, SpeakerGate, voiceprint
+from reachy_demo.voice.speaker_id import KEEP_S, SpeakerGate, to_16k, voiceprint
 
 RATE = 24_000
 POS_1S = b"\x10\x00" * RATE  # first sample > 0
@@ -65,3 +65,11 @@ def test_buffer_keeps_last_seconds() -> None:
 def test_voiceprint_is_unit_mean() -> None:
     v = voiceprint([np.array([2.0, 0.0]), np.array([0.0, 3.0])])
     assert v == pytest.approx([0.70710678, 0.70710678])
+
+
+def test_to_16k_keeps_a_speech_tone() -> None:
+    for rate in (24_000, 48_000):
+        x = np.sin(2 * np.pi * 1000 * np.arange(rate) / rate).astype(np.float32)  # 1 s, 1 kHz
+        y = to_16k(x, rate)
+        assert len(y) == 16_000
+        assert np.sqrt(np.mean(y[1000:-1000] ** 2)) == pytest.approx(0.7071, abs=0.01)
