@@ -11,6 +11,8 @@ from reachy_demo.agent.tools.owner import (
     OwnerMode,
     OwnerTools,
     gated_turns,
+    voice_tag,
+    with_voice_tag,
 )
 from reachy_demo.memory.store import OWNER
 from reachy_demo.voice.speaker_id import Verdict
@@ -194,3 +196,21 @@ async def test_say_does_not_block_turns() -> None:
     async with asyncio.timeout(1):
         got = [t async for t in gated_turns(_turns("a", "b"), mode, io.StringIO(), say=say)]
     assert got == ["b"]
+
+
+def test_voice_tag() -> None:
+    assert voice_tag(Heard("am I your boss?", "guest")) == "[voice: guest]"
+    assert voice_tag("typed") == ""
+
+
+async def test_with_voice_tag_prepends_to_related() -> None:
+    async def related(text: str) -> str:
+        return "mem"
+
+    async def broken(text: str) -> str:
+        raise RuntimeError("db gone")
+
+    heard = Heard("am I your boss?", "owner")
+    assert await with_voice_tag(related)(heard) == "[voice: owner]\n\nmem"
+    assert await with_voice_tag(None)(heard) == "[voice: owner]"
+    assert await with_voice_tag(broken)(heard) == "[voice: owner]"  # memory trouble keeps the tag

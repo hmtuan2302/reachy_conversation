@@ -99,3 +99,47 @@ async def test_converse_tells_mode_which_turn_is_answered() -> None:
         on_answer=on_answer,
     )
     assert begun == [("dance", "owner")]  # the stop's rest keeps the speaker's verdict
+
+
+def test_voice_tag_reaches_the_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    import argparse
+    from typing import Any
+
+    from reachy_demo.agent.tools.owner import VOICE_PROMPT
+
+    class Gate:
+        def feed(self, chunk: bytes, speaking: bool) -> None: ...
+        def own_voice(self, now: float) -> bool:
+            return False
+
+        def mark_own_voice(self, until: float) -> None: ...
+        def take(self) -> tuple[str, float]:
+            return "guest", 0.1
+
+    sent: list[list[dict[str, Any]]] = []
+
+    async def fake_transcribe(_pcm: Any, **kw: Any) -> AsyncIterator[str]:
+        yield "Am I your boss?"
+
+    async def fake_chat(messages: list[dict[str, Any]], **kw: Any) -> AsyncIterator[str]:
+        sent.append(messages)
+        yield "No."
+
+    async def no_audio() -> AsyncIterator[bytes]:
+        return
+        yield b""
+
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.setenv("MEMORY", "off")
+    monkeypatch.setattr(cli, "speaker_gate_from_env", Gate)
+    monkeypatch.setattr(cli, "transcribe_stream", fake_transcribe)
+    monkeypatch.setattr(cli, "chat_events", fake_chat)
+    monkeypatch.setattr(cli, "source_from_args", lambda _a: no_audio())
+    args = argparse.Namespace(
+        mic=False, stdin=False, file=None, type=False, no_speak=True, robot=False
+    )
+    assert cli.run(args) == 0
+    assert sent[0][-1] == {"role": "user", "content": "[voice: guest]\n\nAm I your boss?"}
+    assert VOICE_PROMPT in sent[0][0]["content"]

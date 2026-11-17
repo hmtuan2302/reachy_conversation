@@ -339,6 +339,7 @@ At start the agent prints `(owner mode: available, high 0.5 low 0.3)`, or `(owne
   - A short "stop" is too short to recognise a voice, so anyone's short stop still stops Reachy (stopping is always safe).
   - `dance` and `look_toward_sound` refuse anyone but you.
 - Only a voice scored as you can switch owner mode, on or off.
+- Each spoken sentence reaches the AI tagged `[voice: owner]`, `[voice: guest]` or `[voice: unsure]` (not stored in history or memory). Ask "am I your boss?" and Reachy answers from it: yes for you, no for a guest, "not sure, say it again" when unsure. Works with owner mode on or off.
 - Owner mode resets to off when the agent restarts.
 - With `--type` there's no voice to check: typed turns always count as you, and the `owner_mode` tool isn't offered.
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Protocol, TextIO
 
@@ -17,6 +18,8 @@ from reachy_demo.audio.player import PlayerError
 from reachy_demo.memory.store import OWNER, Speaker
 from reachy_demo.voice.speaker_id import Verdict
 from reachy_demo.voice.tts import TTSError
+
+log = logging.getLogger(__name__)
 
 GUEST = Speaker(0, "guest")  # placeholder: in owner mode guest turns never reach tools
 NAME = "owner_mode"
@@ -31,6 +34,14 @@ PROMPT = (
     "the owner's voice is not enrolled yet."
 )
 
+VOICE_PROMPT = (
+    "A user message may start with [voice: owner], [voice: guest] or [voice: unsure]: whether "
+    "the voice matched your owner's enrolled voice. It is more reliable than the memory block "
+    "about who is talking. When asked whether they are your owner or boss, or who is talking: "
+    "owner means yes, guest means no, unsure means you are not sure and they should say it "
+    "again. Never read the tag aloud."
+)
+
 
 class Heard(str):
     """A turn's text plus whose voice it was. Stays a str for the rest of the agent."""
@@ -41,6 +52,28 @@ class Heard(str):
         self = super().__new__(cls, text)
         self.verdict = verdict
         return self
+
+
+def voice_tag(text: str) -> str:
+    """`[voice: owner|guest|unsure]` for a spoken turn; "" for typed text (no voice)."""
+    return f"[voice: {text.verdict}]" if isinstance(text, Heard) else ""
+
+
+def with_voice_tag(
+    related: Callable[[str], Awaitable[str]] | None,
+) -> Callable[[str], Awaitable[str]]:
+    """Agent's `related` hook with the voice tag in front: sent to the LLM, never stored."""
+
+    async def tagged(text: str) -> str:
+        block = ""
+        if related:
+            try:
+                block = await related(text)
+            except Exception:  # memory trouble must not cost the voice tag
+                log.exception("related memories failed")
+        return "\n\n".join(p for p in (voice_tag(text), block) if p)
+
+    return tagged
 
 
 class Gate(Protocol):
