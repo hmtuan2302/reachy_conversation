@@ -23,7 +23,7 @@ world.update(faces=…, hands=…, objects=…, t=capture_t, head_pose=…)
 | Faces, head pose (F4, F6) | MediaPipe Face Landmarker (TFLite, with transformation matrix + blendshapes) | box, 478 landmarks, head yaw/pitch/roll | 100 ms | 15–25 ms |
 | Expression (F3) | FER+ ONNX (emotion-ferplus, 64×64 grayscale crop), smoothed over 1 s | {neutral, happy, sad, surprise, anger} + conf | 300 ms | 3–5 ms/face |
 | Hands / pointing (F10) | MediaPipe Hand Landmarker | 21 landmarks, `pointing` flag, ray | 100 ms | 15–25 ms |
-| Objects (F4, F5) | YOLOX-nano (Apache-2.0), ONNX via onnxruntime at 416 px, + OpenCV CSRT tracker between detections (F4, built 2026-11-17 in `perception/objects.py`) | label, conf, box | detector 1 s, tracker every frame (only while tracking) | detector ~16 ms, CSRT ~16 ms |
+| Objects (F4, F5) | YOLOX-nano (Apache-2.0), ONNX via onnxruntime at 416 px, tracked by detection with the daemon face tracker's algorithm, + OpenCV CSRT on frames the detector misses (F4, `perception/objects.py`, changed 2026-11-18) | label, conf, box | detector every frame, CSRT on misses only (only while tracking) | detector ~27 ms, CSRT ~29 ms (+19 ms start) on a 640×360 frame |
 
 Budget check: the worst case runs all four (pointing during a find) at ~150 ms/cycle → ~6 Hz. That's acceptable. The Step 0 spike measures the real numbers on this laptop. Detector licence: prefer an Apache/MIT-licensed export (e.g. YOLOX-nano, or RT-DETR-lite); note AGPL if an Ultralytics model is chosen **[arch]**.
 

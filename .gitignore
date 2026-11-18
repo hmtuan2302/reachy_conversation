@@ -13,6 +13,7 @@ dist/
 
 # debug mic recordings and generated speech (personal audio, large)
 data/recordings/
+data/logs/
 data/speech/
 models/
 .superpowers/

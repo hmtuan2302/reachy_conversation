@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import uuid
 from collections import deque
 from collections.abc import Callable
@@ -31,6 +32,12 @@ log = logging.getLogger(__name__)
 GAP_S = 600.0  # 10 min without a turn ends a session
 PRELOAD_GAP_S = 7200.0  # reload the last raw turns only if the last session ended < 2 h ago
 PRELOAD_TURNS = 5
+# Long-running robot moves end with the app. Turns that ran or asked for one are not reloaded, so
+# a new session never "remembers" that it is still tracking or mimicking.
+SESSION_TOOLS = frozenset({"track_face", "track_object", "mimic_me", "find_object"})
+SESSION_WORDS = re.compile(
+    r"\b(track\w*|follow\w*|mimic\w*|copy me|theo dõi|bắt chước|đi theo)", re.IGNORECASE
+)
 RECOVER_S = 86400.0  # re-queue unconsolidated turns from the last day at startup
 
 Job = tuple[
@@ -188,6 +195,9 @@ class MemorySession:
             return []
         messages: list[dict[str, Any]] = []
         for _, p in self.store.last_turns(PRELOAD_TURNS):
+            said = f"{p.get('user', '')} {p.get('answer', '')}"
+            if SESSION_TOOLS & set(p.get("tools") or []) or SESSION_WORDS.search(said):
+                continue
             messages += [
                 {"role": "user", "content": str(p.get("user", ""))},
                 {"role": "assistant", "content": str(p.get("answer", ""))},

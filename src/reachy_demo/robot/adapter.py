@@ -10,6 +10,7 @@ import contextlib
 import json
 import logging
 import math
+import time
 import urllib.request
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -24,10 +25,10 @@ WAKE_S = 2.0  # rest pose -> neutral at startup
 REST_S = 2.0  # neutral -> rest pose at exit
 DAEMON_PORT = 8000  # the daemon's REST API (ReachyMini's default port)
 DOA_TIMEOUT_S = 0.5
-# The daemon's face tracker steers the head itself with this blend weight. 0 pauses its detector,
-# so use the smallest weight that keeps it running: our motion loop stays the head's real owner
-# (its aim pulls the head by 1 %, under a degree).
-TRACKING_WEIGHT = 0.01
+# The daemon's face tracker steers the head itself with this blend weight. 1 = it owns the head
+# orientation while on (as the reference conversation app does: on-robot, no Wi-Fi lag); our
+# targets still set the body yaw. 0 would pause its detector.
+TRACKING_WEIGHT = 1.0
 
 
 def doa_reader(host: str) -> Callable[[], tuple[float, bool] | None]:
@@ -61,18 +62,31 @@ def _daemon_json(host: str, path: str, body: dict[str, Any] | None = None) -> An
         return json.loads(r.read())
 
 
-def face_reader(host: str) -> Callable[[], tuple[float, float] | None]:
+FaceReading = tuple[float, float] | tuple[float, float, float]
+
+
+def face_reader(
+    host: str, clock: Callable[[], float] = time.monotonic
+) -> Callable[[], FaceReading | None]:
     """The face the daemon's detector (YuNet, on the robot) tracks now.
 
-    Returns its centre in the camera frame, x right and y down, each in [-1, 1], or None when no
-    face is seen or detection is off.
+    Returns its centre in the camera frame, x right and y down, each in [-1, 1], and when the
+    daemon stamps it, the time it was detected on `clock`; None when no face is seen or detection
+    is off. The daemon's `ts` is the robot's monotonic clock: the smallest (now - ts) seen so far
+    is taken as the clocks' offset.
     """
+    offset = [math.inf]  # shortcut: the offset includes the fastest reply's latency (~20 ms)
 
-    def read() -> tuple[float, float] | None:
+    def read() -> FaceReading | None:
         face = _daemon_json(host, "media/tracking/face")["face_target"]
+        now = clock()
         if not face.get("detected") or face.get("x") is None or face.get("y") is None:
             return None
-        return float(face["x"]), float(face["y"])
+        x, y = float(face["x"]), float(face["y"])
+        if face.get("ts") is None:
+            return x, y
+        offset[0] = min(offset[0], now - float(face["ts"]))
+        return x, y, float(face["ts"]) + offset[0]
 
     return read
 
@@ -101,6 +115,47 @@ def face_detector() -> Callable[[Any], list[tuple[float, float, float, float]]]:
     return lambda bgr: [f.bbox for f in detector.detect(bgr)]
 
 
+def scored_face_detector(
+    min_score: float = 0.6,
+) -> Callable[[Any], list[tuple[tuple[float, float, float, float], float]]]:
+    """Like `face_detector`, with YuNet's confidence (0-1) per box; NaN if it can't be matched.
+
+    The SDK's `Face` has no score, so the score of each candidate box is recomputed from the
+    same model outputs (as `FaceDetector._decode` does) and matched to the kept boxes. Boxes
+    under `min_score` are dropped (the SDK's default is 0.6).
+    """
+    import numpy as np
+    from reachy_mini.vision import face_detector as yunet  # lazy: the `robot` extra
+
+    scores: dict[tuple[float, float, float, float], float] = {}
+
+    # shortcut: mirrors the SDK's private decode maths; scores turn NaN if the SDK changes it
+    class Scored(yunet.FaceDetector):  # type: ignore[misc]
+        def _decode(self, outputs: dict[str, Any], width: int) -> Any:
+            scores.clear()
+            for stride in yunet._STRIDES:
+                cls, obj = outputs[f"cls_{stride}"][0, :, 0], outputs[f"obj_{stride}"][0, :, 0]
+                score = np.sqrt(np.clip(cls, 0.0, 1.0) * np.clip(obj, 0.0, 1.0))
+                idx = np.nonzero(score >= self._score_threshold)[0]
+                bbox = outputs[f"bbox_{stride}"][0][idx]
+                cols = width // stride
+                cx = ((idx % cols).astype(np.float32) + bbox[:, 0]) * stride
+                cy = ((idx // cols).astype(np.float32) + bbox[:, 1]) * stride
+                w, h = np.exp(bbox[:, 2]) * stride, np.exp(bbox[:, 3]) * stride
+                for k in range(idx.size):
+                    box = (
+                        float(cx[k] - w[k] / 2),
+                        float(cy[k] - h[k] / 2),
+                        float(w[k]),
+                        float(h[k]),
+                    )
+                    scores[box] = float(score[idx[k]])
+            return super()._decode(outputs, width)
+
+    detector = Scored(score_threshold=min_score)
+    return lambda bgr: [(f.bbox, scores.get(f.bbox, math.nan)) for f in detector.detect(bgr)]
+
+
 @dataclass(frozen=True)
 class Robot:
     set_pose: SetPose  # send one target, return at once; only robot/motion.py calls it
@@ -109,8 +164,9 @@ class Robot:
     has_camera: bool
     # (angle rad: 0 = left, pi/2 = front, pi = right; speech) or None. Blocks up to DOA_TIMEOUT_S.
     read_doa: Callable[[], tuple[float, bool] | None]
-    # Face centre (x right, y down, in [-1, 1]) or None. Blocks up to DOA_TIMEOUT_S.
-    read_face: Callable[[], tuple[float, float] | None]
+    # Face centre (x right, y down, in [-1, 1]), + its detection time (monotonic) when known,
+    # or None. Blocks up to DOA_TIMEOUT_S.
+    read_face: Callable[[], FaceReading | None]
     set_face_tracking: Callable[[bool], bool]  # daemon face detector on/off
 
 

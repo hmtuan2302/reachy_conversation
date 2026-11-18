@@ -37,7 +37,7 @@ It needs `--robot` and the robot's camera. Without a camera, the tool is not off
 | Tilt your head toward your left shoulder | Tilts toward the same side (its right shoulder) |
 | Lean 5 cm toward it | Moves its head 10 mm forward |
 
-Angles are copied about 1:1, until the limits below. Reachy keeps facing you: if you stand to one side, it turns toward you first, and your head moves are added on top.
+Angles are copied about 1:1, until the limits below, within about 0.3 s. Reachy faces where you are when mimic starts, and your head moves are added on top. If you then step to one side, it turns toward your new spot slowly, over about 3 s.
 
 ## Limits
 
@@ -55,6 +55,7 @@ You asked for 50–70°. That is not possible here. With the camera in the head,
 
 - Each measured angle goes through a one-euro filter: steady when you hold still, quick when you move.
 - The motion loop moves each axis with a critically damped spring at 50 Hz. Position and speed change smoothly, and speed is capped at 150°/s. Settling takes about 0.3 s.
+- Where you stand follows slowly (`FACE_TAU_S` = 3 s in `attention/mimic.py`). Camera frames arrive 0.2–0.5 s late, and re-aiming at your position every frame made head and body swing around you even when you sat still. Your head angles don't have this problem, so they are copied right away.
 - If your face is lost for 1 s, Reachy slowly looks back to where you were and waits.
 - Mimic stops on its own after 5 minutes.
 

@@ -169,7 +169,7 @@ async def test_big_moves_are_capped_to_keep_the_user_in_view_and_the_robot_safe(
 async def test_faces_a_user_standing_to_the_side() -> None:
     mimic, *_ = _mimic()
     await _started(mimic)
-    target = _feed(mimic, _head(bearing_yaw=30))  # user 30° to the robot's left
+    target = _feed(mimic, _head(bearing_yaw=30), n=400)  # user 30° left; facing drifts slowly
     assert target["yaw"] == pytest.approx(30, abs=0.5)
     mimic.stop()
 
@@ -196,8 +196,8 @@ async def test_leaning_in_moves_the_head_forward() -> None:
 async def test_lost_face_looks_back_at_the_user() -> None:
     mimic, *_ = _mimic()
     await _started(mimic)
-    _feed(mimic, _head(yaw=20, roll=10, bearing_yaw=10))
-    mimic.step(None, dict(NEUTRAL), 102.0 + LOST_S + 0.1)
+    _feed(mimic, _head(yaw=20, roll=10, bearing_yaw=10), n=400)  # facing drifts slowly
+    mimic.step(None, dict(NEUTRAL), 120.0 + LOST_S + 0.1)
     assert mimic._target is not None
     assert mimic._target["yaw"] == pytest.approx(10, abs=0.5)
     assert mimic._target["roll"] == 0
@@ -281,3 +281,27 @@ async def test_stop_tracking_then_mimic_in_one_sentence() -> None:
     await _until(lambda: mimic._target is not None and not follow.active)
     assert mimic.active
     mimic.stop()
+
+
+def _late_camera(lag: float) -> tuple[list[float], list[float]]:
+    """Head yaw with frames `lag` s old: user still at 10° (2-4 s), then turns their head 20°."""
+    m = Mimic(Motion(lambda p: None), lambda: None, lambda: None)  # type: ignore[arg-type,return-value]
+    m._pose_at(0.0, dict(NEUTRAL))
+    seen: list[tuple[float, float]] = []
+    yaws: list[float] = []
+    for i in range(500):  # 50 Hz ticks, ~16 Hz readings
+        t = i * 0.02
+        pose = m._pose_at(t, dict(NEUTRAL))
+        seen.append((t, pose["yaw"]))
+        if i % 3 == 0:
+            cam = [y for s, y in seen if s <= t - lag][-1:] or [0.0]
+            turn = 20.0 if t >= 5 else 0.0
+            m.step(HeadPose(turn, 0.0, 0.0, 10.0 - cam[0], 0.0, 80.0), dict(pose), t)
+        yaws.append(pose["yaw"])
+    return yaws[100:250], yaws[400:]
+
+
+def test_late_frames_do_not_swing_the_head() -> None:
+    still, turned = _late_camera(0.4)
+    assert all(abs(y - 10) < 3 for y in still)  # facing the user, steady
+    assert all(abs(y + 10) < 3 for y in turned)  # mirrored 20° turn, steady

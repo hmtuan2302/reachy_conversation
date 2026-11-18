@@ -93,7 +93,7 @@ Use recall for anything else. Never invent memories: if recall finds nothing, sa
 
 It holds your name, preferences, due follow-ups, the **last 5 conversation summaries** and up to 10 top facts. When it gets too long, facts are trimmed first, keeping at least 5.
 
-If you restart within **2 hours**, the last 5 turns are also reloaded into the conversation, so Reachy picks up where it left off.
+If you restart within **2 hours**, the last 5 turns are also reloaded into the conversation, so Reachy picks up where it left off. Turns about tracking, following, mimic or find object are skipped: those end when the app exits, and a new session starts with nothing running. Summaries leave robot commands out too.
 
 ## How Reachy finds what's relevant
 

@@ -40,8 +40,16 @@ class JsonFormatter(logging.Formatter):
         return line
 
 
-def configure_logging(log_dir: Path, level: str = "INFO", secrets: Iterable[str] = ()) -> Path:
-    """Console (human) + file (JSONL, data/logs/run-<ts>.jsonl). Returns the file path."""
+def configure_logging(
+    log_dir: Path,
+    level: str = "INFO",
+    secrets: Iterable[str] = (),
+    console_level: str | None = None,
+) -> Path:
+    """Console (human) + file (JSONL, data/logs/run-<ts>.jsonl). Returns the file path.
+
+    `console_level` raises the console's threshold (e.g. WARNING beside a chat in the terminal).
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / f"run-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
     secrets = list(secrets)
@@ -50,6 +58,8 @@ def configure_logging(log_dir: Path, level: str = "INFO", secrets: Iterable[str]
     file_handler.setFormatter(JsonFormatter(secrets))
     console = logging.StreamHandler(sys.stderr)
     console.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+    if console_level:
+        console.setLevel(console_level)
 
     root = logging.getLogger()
     root.handlers[:] = [file_handler, console]

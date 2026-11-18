@@ -31,6 +31,9 @@ Rules:
 - Turn relative dates into absolute dates using today's date.
 - If something changed ("I moved to Hanoi"), state the new fact only.
 - Skip greetings, small talk, questions, requests to the robot, and anything the robot said.
+- Never keep what the robot should do now or until told to stop (track or follow me, mimic me,
+  look at me, dance, find something): those end with the conversation. Only lasting rules are
+  settings, e.g. "only obey the owner" or "answer in Vietnamese".
 - sensitive = true for health, money, passwords, ID numbers and exact addresses.
 - follow_ups: things a friend would ask about later (an exam, a trip, being sick), as
   "Ask how ..." with the due date on the day it happens or ends.
@@ -67,7 +70,10 @@ long-term memory. Today is {today}. Reply with JSON only:
  "topics": ["2-5 short topics"], "importance": 0.0-1.0,
  "follow_ups": [{{"text": "Ask how ...", "due": "YYYY-MM-DD or null"}}]}}
 follow_ups: only open things worth asking about in a later conversation. Small talk only:
-importance 0.1 and no follow-ups."""
+importance 0.1 and no follow-ups. Leave out robot commands and the robot's activities
+(tracking, following, mimicking, dancing, searching, moving its head, stopping): they ended
+with the conversation and are not memories. If nothing else happened, the summary is
+"A short test of the robot." with importance 0.1."""
 
 
 def parse_json(reply: str) -> dict[str, Any]:

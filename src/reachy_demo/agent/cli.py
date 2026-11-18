@@ -49,13 +49,20 @@ from reachy_demo.memory.embed import load_embedder
 from reachy_demo.memory.session import MemorySession
 from reachy_demo.memory.store import OWNER, MemoryStore, Speaker
 from reachy_demo.memory.vectors import VectorIndex
+from reachy_demo.ops.logging import configure_logging
 from reachy_demo.ops.tokens import est_tokens
+from reachy_demo.perception.debug_view import DebugView
 from reachy_demo.perception.head_pose import DEFAULT_MODEL as MIMIC_MODEL
 from reachy_demo.perception.head_pose import HeadPoseEstimator
+from reachy_demo.perception.objects import (
+    CAMERA_LAG_S,
+    BoxesDetector,
+    ObjectDetector,
+    ObjectSource,
+)
 from reachy_demo.perception.objects import DEFAULT_MODEL as OBJECT_MODEL
-from reachy_demo.perception.objects import ObjectDetector, ObjectSource
 from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
-from reachy_demo.robot.adapter import connect_robot, face_detector
+from reachy_demo.robot.adapter import connect_robot, face_detector, scored_face_detector
 from reachy_demo.robot.dances import load_dances
 from reachy_demo.robot.motion import Motion
 from reachy_demo.voice.speak_cli import speaker_from_env, uses_gemini
@@ -69,6 +76,7 @@ from reachy_demo.voice.speaker_id import (
 from reachy_demo.voice.speaker_id import DEFAULT_MODEL as SPEAKER_MODEL
 from reachy_demo.voice.transcribe import transcribe_stream
 from reachy_demo.voice.transcribe_cli import (
+    RECORDINGS_DIR,
     add_source_args,
     recorded,
     run_until_done,
@@ -85,8 +93,17 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     p.add_argument(
         "--robot", action="store_true", help="let the agent move the head (robot at ROBOT_HOST)"
     )
+    p.add_argument(
+        "--debug-view",
+        type=int,
+        nargs="?",
+        const=8090,
+        metavar="PORT",
+        help="with --robot: camera page with face boxes at http://127.0.0.1:PORT/ (default 8090)",
+    )
 
 
+FACE_MIN_SCORE = 0.85  # debug view: weaker face boxes are dropped (FACE_MIN_SCORE)
 DUCK = 0.25  # playback volume while the user talks over Reachy
 Speak = Callable[[str], Awaitable[object]]
 Classify = Callable[[str], Awaitable[Intent]]
@@ -101,6 +118,7 @@ async def converse(
     on_stop: Callable[[], None] | None = None,
     moving: Callable[[], bool] | None = None,
     on_answer: Callable[[str], None] | None = None,
+    on_line: Callable[[str, str], None] | None = None,
 ) -> None:
     """Answer each completed user turn in order.
 
@@ -110,6 +128,8 @@ async def converse(
     queued head moves); anything else is dropped. With `moving` and `classify`, a turn that
     arrives while no answer runs but the robot still moves is stop-checked first, too.
     `on_answer(text)` runs as each answer starts (owner mode: whose turn the tools serve).
+    `on_line(who, text)` gets each turn ("you") and each whole answer ("bot"), without the
+    context or status lines (e.g. for the debug view's chat panel).
     """
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     line_open = False  # "bot: " printed, answer line not ended yet
@@ -130,6 +150,8 @@ async def converse(
         if on_answer:
             on_answer(text)
         write(f"you: {text}\nbot: ")
+        if on_line:
+            on_line("you", str(text))
         line_open = True
         parts: list[str] = []
         try:
@@ -139,9 +161,17 @@ async def converse(
         except LLMError as e:  # fail small: report it and keep listening
             write(f" (error: {e})\n")
             line_open = False
+            if on_line:
+                on_line("bot", f"{''.join(parts)} (error: {e})")
             return
+        except asyncio.CancelledError:  # a spoken stop
+            if on_line:
+                on_line("bot", f"{''.join(parts)} (stopped)")
+            raise
         write("\n")
         line_open = False
+        if on_line:
+            on_line("bot", "".join(parts))
         if speak and (spoken := "".join(parts).strip()):
             # shortcut: speaks the whole answer once it is complete; stream per sentence
             # if long answers feel slow to start.
@@ -208,6 +238,25 @@ async def converse(
         await listener  # re-raise a source/S2T failure after the answers already queued
     finally:
         listener.cancel()
+
+
+def robot_status(activities: dict[str, Callable[[], bool]]) -> str:
+    """The live state of long-running moves, so the model never takes it from old chat or memory
+    (every one of them ends when the app exits)."""
+    doing = [name for name, active in activities.items() if active()]
+    now = ", ".join(doing) if doing else "not following or mimicking anyone or anything"
+    return (
+        f"[robot] Right now you are {now}. This line is the truth: anything earlier in the chat "
+        "or in memory about tracking, following or mimicking may be out of date."
+    )
+
+
+def _joined(*parts: Callable[[], str] | None) -> Callable[[], str] | None:
+    """One context callable from several (memory block, robot state); None if all are None."""
+    given = [p for p in parts if p]
+    if not given:
+        return None
+    return lambda: "\n\n".join(text for p in given if (text := p()))
 
 
 def _rest_of(turn: str, rest: str) -> str:
@@ -288,6 +337,13 @@ def run(args: argparse.Namespace) -> int:
         if not value:
             print(f"config error: {name} is required", file=sys.stderr)
             return 2
+    log_path = configure_logging(
+        Path(os.environ.get("LOG_DIR", "").strip() or "data/logs"),
+        os.environ.get("LOG_LEVEL", "").strip().upper() or "INFO",
+        secrets=keys.values(),
+        console_level="WARNING",  # the terminal is the chat; details go to the file
+    )
+    print(f"  (log: {log_path})", file=sys.stderr)
     try:
         source = None if args.type else source_from_args(args)
     except ValueError as e:
@@ -363,7 +419,10 @@ def run(args: argparse.Namespace) -> int:
         )
         prompt += f" {voice_tools.PROMPT}"
 
-    def make_agent(sets: list[ToolSet], prompt: str) -> Agent | None:
+    def make_agent(
+        sets: list[ToolSet], prompt: str, status: Callable[[], str] | None = None
+    ) -> Agent | None:
+        """`status()`: live robot state appended to the memory block each round."""
         tools = Toolbox(*sets) if sets else None
         budget = context_max - (
             est_tokens(json.dumps(tools.specs(), ensure_ascii=False)) if tools else 0
@@ -386,7 +445,7 @@ def run(args: argparse.Namespace) -> int:
             partial(llm, model=model, tools=tools.specs()) if tools else partial(llm, model=model),
             system_prompt=prompt,
             tools=tools,
-            context=memory[0].context if memory else None,
+            context=_joined(memory[0].context if memory else None, status),
             on_turn=memory[0].submit if memory else None,
             max_tokens=budget,
             related=memory[0].related if push and memory else None,
@@ -410,13 +469,35 @@ def run(args: argparse.Namespace) -> int:
             assert sound  # made above for --robot
             sets.append(sound_tools.SoundTools(sound, motion, speaker=mode.speaker))
             prompt += f" {sound_tools.PROMPT}"
-            follow = Follow(motion, robot.read_face, robot.set_face_tracking, sound)
+            lag_s = camera_lag_from_env()
+            if lag_s is None:
+                return 2
+            # Faces go through the same pipeline as objects: YuNet on the laptop, then
+            # nearest box + smoothing + CSRT on misses, steered from here with lag correction.
+            faces = ObjectSource(
+                robot.grab_frame,
+                lambda: BoxesDetector("face", scored_face_detector(FACE_TRACK_SCORE)),
+                lag_s=lag_s,
+            )
+
+            def face_switch(on: bool) -> bool:
+                if not on:
+                    return faces.switch(False)
+                return robot.has_camera and faces.begin("face")
+
+            follow = Follow(motion, faces.read, face_switch, sound)
+            activities: dict[str, Callable[[], bool]] = {
+                "following the user": lambda: follow.active
+            }
+            view: DebugView | None = None
             objects: tuple[Follow, ObjectSource] | None = None
             prompt += f" {track.PROMPT}"
             if robot.has_camera:
                 ask, label = vision_asker(vision, keys, base_url)
                 object_model = Path(os.environ.get("OBJECT_MODEL", "").strip() or OBJECT_MODEL)
-                seen = ObjectSource(robot.grab_frame, partial(ObjectDetector, object_model), ask)
+                seen = ObjectSource(
+                    robot.grab_frame, partial(ObjectDetector, object_model), ask, lag_s=lag_s
+                )
                 objects = (
                     Follow(
                         motion,
@@ -424,12 +505,16 @@ def run(args: argparse.Namespace) -> int:
                         seen.switch,
                         poll_s=OBJECT_POLL_S,
                         give_up_s=OBJECT_GIVE_UP_S,
+                        first_wait_s=OBJECT_WAIT_S,
                         on_lost=lambda: print("  (lost the object, stopped tracking)"),
                         name="the object",
                     ),
                     seen,
                 )
                 prompt += f" {track.OBJECT_PROMPT}"
+                activities["following an object"] = lambda: (
+                    objects is not None and objects[0].active
+                )
                 sweep_s = search_sweep_from_env()
                 if sweep_s is None:
                     return 2
@@ -449,14 +534,27 @@ def run(args: argparse.Namespace) -> int:
                     lambda: HeadPoseEstimator(face_detector(), face_model),
                 )
                 sets.append(mimic_tools.MimicTools(copy, speaker=mode.speaker))
+                activities["mimicking the user"] = lambda: copy.active
                 prompt += f" {mimic_tools.PROMPT}"
                 print(f"  (camera on, vision: {label})")
+                if args.debug_view is not None:
+                    min_score = face_score_from_env()
+                    if min_score is None:
+                        return 2
+                    view = DebugView(
+                        robot.grab_frame,
+                        partial(scored_face_detector, min_score),
+                        lambda: None,  # the robot's face tracker is no longer used
+                        record_dir=RECORDINGS_DIR,
+                        read_object=lambda: faces.mark() or seen.mark(),
+                    )
+                    print(f"  (debug view: {stack.enter_context(view.serve(args.debug_view))})")
                 sets.append(camera.CameraTools(robot.grab_jpeg, ask))
                 prompt += f" {camera.PROMPT}"
             else:
                 print("  (no camera: the robot can move but not see)")
             sets.append(track.TrackTools(follow, speaker=mode.speaker, objects=objects))
-            agent = make_agent(sets, prompt)
+            agent = make_agent(sets, prompt, status=partial(robot_status, activities))
             if agent is None:
                 return 2
             main = converse(
@@ -468,6 +566,7 @@ def run(args: argparse.Namespace) -> int:
                 on_stop=head_tools.stop,
                 moving=lambda: head_tools.busy,
                 on_answer=mode.begin,
+                on_line=view.add_line if view else None,
             )
             main = with_sound(main, sound, robot.read_doa, lambda: motion.pose["yaw"])
             code = run_until_done(_with_memory(_then_close(main, head_tools), memory))
@@ -484,6 +583,8 @@ def run(args: argparse.Namespace) -> int:
 VISION_PROVIDERS = ("hf", "deepseek")
 OBJECT_POLL_S = 0.02  # reading a frame + tracking already takes ~30 ms
 OBJECT_GIVE_UP_S = 10.0  # object unseen this long: stop tracking
+FACE_TRACK_SCORE = 0.6  # YuNet confidence for tracking, the SDK's default (as on the robot)
+OBJECT_WAIT_S = 60.0  # not in view at the start: wait this long for it to show up
 DEFAULT_CONTEXT_TOKENS = 8000
 PUSH_RESERVE_TOKENS = 200  # up to 3 related-memory lines of 240 chars, sent with the user turn
 
@@ -521,6 +622,32 @@ def speaker_gate_from_env() -> SpeakerGate | None:
         return None
     print(f"  (owner mode: available, high {high} low {low})")
     return SpeakerGate(embed, voice, high, low)
+
+
+def face_score_from_env() -> float | None:
+    """Debug view's minimum face confidence (FACE_MIN_SCORE), or None after a config error."""
+    raw = os.environ.get("FACE_MIN_SCORE", "").strip()
+    try:
+        value = float(raw) if raw else FACE_MIN_SCORE
+    except ValueError:
+        value = -1.0
+    if not 0.0 < value <= 1.0:
+        print(f"config error: FACE_MIN_SCORE must be 0-1, got {raw!r}", file=sys.stderr)
+        return None
+    return value
+
+
+def camera_lag_from_env() -> float | None:
+    """Camera + motor delay for object tracking (CAMERA_LAG_S), or None after a config error."""
+    raw = os.environ.get("CAMERA_LAG_S", "").strip()
+    try:
+        value = float(raw) if raw else CAMERA_LAG_S
+    except ValueError:
+        value = -1.0
+    if not 0.0 <= value <= 2.0:
+        print(f"config error: CAMERA_LAG_S must be 0-2 seconds, got {raw!r}", file=sys.stderr)
+        return None
+    return value
 
 
 def search_sweep_from_env() -> float | None:

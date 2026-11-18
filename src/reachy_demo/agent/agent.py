@@ -160,6 +160,11 @@ class Agent:
             results = []
             for c in calls:  # sequential on purpose
                 result = await self._tools.call(c.name, c.arguments)
+                log.info(
+                    "tool %s",
+                    c.name,
+                    extra={"arguments": c.arguments, "result": json.dumps(result)[:500]},
+                )
                 results.append(result)
                 if self._debug:
                     self._debug(f"tool {c.name}", json.dumps(result, ensure_ascii=False))

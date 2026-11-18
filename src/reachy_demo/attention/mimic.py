@@ -10,6 +10,12 @@ Smoothness, in two stages:
 2. A critically damped spring per axis in the motion loop (50 Hz): position and speed stay
    continuous, so the head never jumps, and speed is capped at SPEED_DPS.
 
+Where the user is: camera frames arrive 0.2-0.5 s late, so the image position of the face lags
+the head. Re-aiming at it every frame made a fast feedback loop that swung head and body
+around a still user (±55° at 0.4 s late). So that position only drifts the "facing the user"
+direction slowly (FACE_TAU_S). The copied head angles need no such care: they are measured
+relative to the user's line of sight, which the robot's own turn doesn't change.
+
 Limits: robot/motion.py clamps every pose to the safety box (pitch ±30°, roll ±25°, head yaw
 ±45° from the body, body ±120°, x ±20 mm; every combination checked with the SDK's IK on
 2026-11-17). On top of that, the camera sits in the head: turn it too far from the user and they
@@ -60,6 +66,7 @@ OMEGA = 12.0  # spring stiffness (rad/s): ~0.3 s to settle, inside the 300 ms la
 SPEED_DPS = 150.0  # also mm/s for x
 MAX_DT = 0.05  # a late tick integrates at most this much
 POLL_S = 0.03  # the frame grab and the model set the real rate (~15-25 Hz)
+FACE_TAU_S = 3.0  # facing the user follows their position this slowly (frames lag the head)
 MAX_MIMIC_S = 300.0  # shortcut: mimic ends after 5 min like a dance does; raise if needed
 STEERED = ("yaw", "pitch", "roll", "x", "body_yaw")
 
@@ -117,11 +124,12 @@ class Mimic:
         self._pose: Pose = dict(NEUTRAL)
         self._speed: dict[str, float] = dict.fromkeys(STEERED, 0.0)
         self._t = 0.0
-        self._filters = {k: OneEuro() for k in ("user_yaw", "user_pitch", "yaw", "pitch", "roll")}
+        self._filters = {k: OneEuro() for k in ("yaw", "pitch", "roll")}
         self._distances: list[float] = []
         self._rest_cm: float | None = None
         self._last_seen = -math.inf
         self._user: tuple[float, float] | None = None  # (yaw, pitch) of the user's face
+        self._user_t = 0.0  # when `_user` was last updated
 
     @property
     def active(self) -> bool:
@@ -206,12 +214,18 @@ class Mimic:
             return
         self._last_seen = now
         f = self._filters
-        # Where the user is, in robot coordinates: the camera turns with the head.
-        user = (
-            f["user_yaw"](wrap(seen_from["yaw"] + head.bearing_yaw), now),
-            f["user_pitch"](seen_from["pitch"] + head.bearing_pitch, now),
-        )
-        self._user = user
+        # Where the user is, in robot coordinates: the camera turns with the head. Slowly, since
+        # the frame is older than `seen_from` (see the module docstring).
+        seen = (wrap(seen_from["yaw"] + head.bearing_yaw), seen_from["pitch"] + head.bearing_pitch)
+        if self._user is None:
+            user = seen
+        else:
+            k = min(max(now - self._user_t, 0.0) / FACE_TAU_S, 1.0)
+            user = (
+                wrap(self._user[0] + k * wrap(seen[0] - self._user[0])),
+                self._user[1] + k * (seen[1] - self._user[1]),
+            )
+        self._user, self._user_t = user, now
         yaw, pitch = f["yaw"](head.yaw, now), f["pitch"](head.pitch, now)
         # The image roll turns with the camera: add the robot's roll back to get the user's.
         roll = f["roll"](head.roll + seen_from["roll"], now)

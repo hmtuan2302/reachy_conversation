@@ -559,3 +559,32 @@ def test_context_debug_env(
         seen["debug"]("related memories", "[related memories]\n- fact: x")
         out = capsys.readouterr().out
         assert "  ┌ related memories\n  │ [related memories]\n  │ - fact: x\n  └\nbot: " in out
+
+
+async def test_converse_reports_lines_without_status() -> None:
+    lines: list[tuple[str, str]] = []
+    await cli.converse(
+        _turns("A", "B"),
+        _agent(fail={"B"}),
+        io.StringIO(),
+        on_line=lambda w, t: lines.append((w, t)),
+    )
+    assert lines == [
+        ("you", "A"),
+        ("bot", "a1"),
+        ("you", "B"),
+        ("bot", "b1 (error: DeepSeek returned 401)"),
+    ]
+
+
+def test_joined_context_skips_empty_parts() -> None:
+    assert cli._joined(None, None) is None
+    ctx = cli._joined(lambda: "[memory] x", lambda: "", lambda: "[robot] y")
+    assert ctx is not None and ctx() == "[memory] x\n\n[robot] y"
+
+
+def test_robot_status_lists_only_running_moves() -> None:
+    on = {"following the user": lambda: True, "mimicking the user": lambda: False}
+    assert cli.robot_status(on).startswith("[robot] Right now you are following the user.")
+    off = {"following the user": lambda: False}
+    assert "not following or mimicking anyone" in cli.robot_status(off)

@@ -228,3 +228,77 @@ async def test_stop_dance_then_track_in_one_sentence() -> None:
     await _until(lambda: track._target is not None)  # the neutral ease ran, tracking runs
     assert track.active
     track.stop()
+
+
+def _still_face_with_lag(lag: float, stamped: bool) -> list[float]:
+    """Head yaw over 8 s chasing a still face at 20° left, readings `lag` s old (10 Hz)."""
+    import math
+
+    from reachy_demo.perception.head_pose import TAN_HALF_H
+
+    t = [0.0]
+    track = Follow(Motion(lambda p: None), lambda: None, lambda on: True, clock=lambda: t[0])
+    seen: list[tuple[float, float]] = []
+    yaws: list[float] = []
+    for i in range(400):  # 50 Hz motion ticks
+        t[0] = i * 0.02
+        yaw = track._pose_at(t[0], dict(NEUTRAL))["yaw"]
+        seen.append((t[0], yaw))
+        if i % 5 == 0:
+            at = t[0] - lag
+            cam = [y for s, y in seen if s <= at][-1:] or [0.0]
+            x = math.tan(math.radians(cam[0] - 20.0)) / TAN_HALF_H
+            track.step((x, 0.0, at) if stamped else (x, 0.0), t[0])
+        yaws.append(yaw)
+    return yaws
+
+
+def test_lagged_readings_without_a_time_wander_around_a_still_face() -> None:
+    late = _still_face_with_lag(0.4, stamped=False)[-150:]
+    assert max(late) - min(late) > 20  # the bug this guards: old offsets applied to a new pose
+
+
+def test_lagged_readings_with_their_time_settle_on_a_still_face() -> None:
+    yaws = _still_face_with_lag(0.4, stamped=True)
+    assert max(yaws) < 22
+    assert all(abs(y - 20) < 1 for y in yaws[-150:])
+
+
+def test_a_repeated_reading_is_applied_once() -> None:
+    t = [10.0]
+    track = Follow(Motion(lambda p: None), lambda: None, lambda on: True, clock=lambda: t[0])
+    track._pose_at(0.0, dict(NEUTRAL))
+    track.step((0.5, 0.0, 9.9), now=10.0)
+    assert track._target is not None
+    first = track._target["yaw"]
+    t[0] = 10.5
+    track._pose_at(0.5, dict(NEUTRAL))  # the head moved toward it
+    track.step((0.5, 0.0, 9.9), now=10.5)  # same frame again: no new information
+    assert track._target["yaw"] == first
+
+
+async def test_robot_steered_tracking_ignores_readings_and_turns_detector_off() -> None:
+    det = Detector()
+    det.face = (0.9, 0.0)  # would turn the head far right if steered from here
+    poses: list[Pose] = []
+    motion = Motion(poses.append, hz=1000, clock=FakeClock())
+    track = Follow(motion, det.read, det.switch, Voice(), poll_s=0.001, steer_on_robot=True)
+    await _started(track, motion)
+    await asyncio.sleep(0.05)
+    assert track._target is not None and track._target["yaw"] == pytest.approx(0)
+    assert det.calls == [True]
+    track.stop()
+    await _until(lambda: not track.active)
+    assert det.calls == [True, False]
+
+
+async def test_robot_steered_without_a_detector_still_follows_the_voice() -> None:
+    det = Detector(ok=False)
+    motion = Motion(lambda p: None, hz=1000, clock=FakeClock())
+    voice = Voice()
+    track = Follow(motion, det.read, det.switch, voice, poll_s=0.001, steer_on_robot=True)
+    assert await track.start() == (None, False)
+    await _until(lambda: track._target is not None)
+    voice.event = SoundEvent("speaker", 40.0, 1.0)
+    await _until(lambda: track._target is not None and track._target["yaw"] > 30)
+    track.stop()

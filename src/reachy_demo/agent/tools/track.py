@@ -28,14 +28,18 @@ PROMPT = (
     "keep looking at them ('track me', 'follow me', 'theo dõi tôi'), call track_face with "
     "enabled true, then say one short sentence that you are following them until they say "
     "stop. If they ask you to stop following, call track_face with enabled false. If it "
-    "returns voice_only, add that you can't see right now, so you follow their voice."
+    "returns voice_only, add that you can't see right now, so you follow their voice. "
+    "Whether you are following right now is in the [robot] line; earlier messages and memories "
+    "about tracking may be out of date. When asked to track, always call track_face, even if "
+    "you think you already are."
 )
 OBJECT_PROMPT = (
     "You can also follow an object with your head ('track my phone', 'follow the cup', "
     "'theo dõi điện thoại của tôi'): call track_object with the user's words as target and the "
     "coco_class that is the same kind of thing (a mug is a cup, an iPhone is a cell phone). "
     "If no class is that kind of thing (keys, a pen, earbuds), use none, never a look-alike. "
-    "If it returns not_visible, ask them to hold it in front of you. If "
+    "If it returns waiting_for_object, say you will follow it as soon as you see it and ask "
+    "them to hold it in front of you. If "
     "it returns unsupported_object, say you can only track everyday objects like a phone, "
     "cup, bottle, book or remote. To stop, call track_face with enabled false."
 )
@@ -152,4 +156,4 @@ class TrackTools:
         if error:
             source.release()
             return {"error": error}
-        return {"status": "tracking", "object": label}
+        return {"status": "waiting_for_object" if source.waiting else "tracking", "object": label}

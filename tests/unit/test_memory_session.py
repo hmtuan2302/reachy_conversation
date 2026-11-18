@@ -329,3 +329,20 @@ async def test_related_cache_is_dropped_when_the_speaker_changes() -> None:
     store._db.execute("INSERT INTO people(id, role) VALUES (2, 'guest')")
     current[0] = Speaker(2, "guest")
     assert await s.related("ok") == ""  # never the owner's cached block
+
+
+async def test_preload_skips_turns_about_long_running_moves() -> None:
+    s, store, clock, _ = _session()
+    s.submit(_turn("tracking my face", "I'm tracking your face now."))  # no tool: a false claim
+    store.log_event(
+        "turn",
+        {"user": "copy what I do", "answer": "ok", "tools": ["mimic_me"]},
+        person_id=OWNER_ID,
+        session_id="s",
+    )
+    s.submit(_turn("what's the weather", "Sunny."))
+    clock.t += 60
+    assert s.preload() == [
+        {"role": "user", "content": "what's the weather"},
+        {"role": "assistant", "content": "Sunny."},
+    ]
