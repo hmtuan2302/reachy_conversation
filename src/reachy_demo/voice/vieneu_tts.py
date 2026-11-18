@@ -1,13 +1,15 @@
 """Local VieNeu-TTS v3 Turbo (pnnbao-ump/VieNeu-TTS-v3-Turbo), streamed. `uv sync --extra vieneu`.
 
 `Vieneu().infer_stream(text, voice=...)` yields float32 chunks at 48 kHz; we turn them into the
-24 kHz mono PCM16 the player expects. Runs on CPU via ONNX Runtime; first run downloads ~0.5 GB.
+24 kHz mono PCM16 the player expects. TTS_DEVICE picks CPU (ONNX Runtime) or GPU (PyTorch + CUDA,
+`uv sync --extra vieneu-gpu`); first run downloads ~0.5 GB.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -48,8 +50,37 @@ def _fetch_real_files(repo: str, files: list[str], subfolder: str | None) -> Pat
     return Path(str(last)).parent
 
 
-@cache
+def device_from_env() -> str:
+    """TTS_DEVICE: cpu | gpu | empty (auto: GPU if PyTorch sees CUDA, else CPU) → VieNeu device."""
+    raw = os.environ.get("TTS_DEVICE", "").strip().lower()
+    devices = {"": "auto", "auto": "auto", "cpu": "cpu", "gpu": "cuda", "cuda": "cuda"}
+    if raw not in devices:
+        raise TTSError(f"TTS_DEVICE must be cpu or gpu, got {raw!r}")
+    return devices[raw]
+
+
+_load_lock = threading.Lock()
+
+
 def _model() -> Any:
+    with _load_lock:  # warm_up's thread and the first answer may ask at the same time
+        return _load()
+
+
+def warm_up() -> None:
+    """Load the model and say one short line, in a thread: the GPU's first request records
+    CUDA graphs (~8 s), so the first real answer would wait that long."""
+
+    def run() -> None:
+        with contextlib.suppress(Exception):  # a real request reports the error
+            for _ in _model().infer_stream("Xin chào."):
+                pass
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+@cache
+def _load() -> Any:
     try:
         from vieneu import Vieneu
         from vieneu._v3_turbo_engine.onnx_runtime_lite import OnnxV3LiteEngine
@@ -58,7 +89,15 @@ def _model() -> Any:
     # shortcut: patches a private VieNeu helper (checked on vieneu 3.8.4); drop it once VieNeu
     # or onnxruntime handles HF cache symlinks.
     OnnxV3LiteEngine._fetch = staticmethod(_fetch_real_files)
-    return Vieneu()  # loads once (downloads ~0.5 GB on the first run)
+    device = device_from_env()
+    if device == "cuda":
+        try:
+            import torch
+        except ImportError as e:
+            raise TTSError("TTS_DEVICE=gpu needs PyTorch: uv sync --extra vieneu-gpu") from e
+        if not torch.cuda.is_available():
+            raise TTSError("TTS_DEVICE=gpu but PyTorch sees no CUDA GPU (check nvidia-smi)")
+    return Vieneu(device=device)  # loads once (downloads ~0.5 GB on the first run)
 
 
 def to_pcm24k(chunk: Any) -> bytes:

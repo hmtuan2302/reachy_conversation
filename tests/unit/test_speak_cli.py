@@ -12,6 +12,7 @@ from reachy_demo.voice import speak_cli
 @pytest.fixture(autouse=True)
 def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(speak_cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.setattr(speak_cli, "warm_up", lambda: None)  # no real model load in tests
     monkeypatch.setenv("GEMINI_API_KEY", "g")
     monkeypatch.setenv("TTS_PLAYER", "none")
     monkeypatch.setenv("TTS_VOICE", "Puck")

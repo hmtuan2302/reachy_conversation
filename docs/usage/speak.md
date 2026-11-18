@@ -23,20 +23,26 @@ Playback uses Windows `ffplay.exe` (from `winget install Gyan.FFmpeg.Essentials`
 
 ## Local model: VieNeu-TTS v3 Turbo
 
-Runs [pnnbao-ump/VieNeu-TTS-v3-Turbo](https://huggingface.co/pnnbao-ump/VieNeu-TTS-v3-Turbo) on this machine. It needs no API key and is Vietnamese-first (Apache-2.0). It runs on CPU through ONNX Runtime at about 0.5× real time on a recent i5, and uses CUDA automatically if it finds it.
+Runs [pnnbao-ump/VieNeu-TTS-v3-Turbo](https://huggingface.co/pnnbao-ump/VieNeu-TTS-v3-Turbo) on this machine. It needs no API key and is Vietnamese-first (Apache-2.0). It runs on the CPU through ONNX Runtime, or on an NVIDIA GPU through PyTorch + CUDA (`TTS_DEVICE`).
 
 ```bash
 uv sync --extra vieneu          # installs the `vieneu` package; the model downloads on the first run
+uv sync --inexact --extra vieneu-gpu   # GPU only: PyTorch 2.8 + CUDA 12.6 (~3 GB), keeps your other extras
 ```
+
+The CUDA 12.6 build runs on NVIDIA drivers 525 or newer (tested on driver 546.30 under WSL2). Check: `uv run python -c "import torch; print(torch.cuda.is_available())"` prints `True`.
 
 In `.env`:
 
 ```
 TTS_PROVIDER=vieneu             # default: gemini
 # TTS_VOICE=Mai Anh             # a preset voice name; empty = the model's default
+TTS_DEVICE=gpu                  # cpu | gpu; empty = GPU if PyTorch sees CUDA, else CPU
 ```
 
 The first run downloads about 0.5 GB. The ONNX files go to `models/vieneu/` as real files, because `onnxruntime` 1.24+ won't load weights through the Hugging Face cache's symlinks. Measured on this laptop (CPU): loading takes about 6–12 s once per process. Generation speed varies from run to run: on 2026-11-17 it ran 1.1–1.6× *slower* than real time (7 s of speech took about 9.6 s).
+
+On the GPU (RTX 3060 Laptop, 2026-11-19) it runs faster than real time: 6.3 s of speech took about 4.2 s, and first sound came after 0.3–0.7 s. Its first request records CUDA graphs and takes about 8 s. So `speak` and `agent` load the model and say one short line in a background thread at startup (`warm_up` in [vieneu_tts.py](../../src/reachy_demo/voice/vieneu_tts.py)). Loading plus warm-up takes about 25 s. An answer that comes earlier waits for it.
 
 With `vieneu`, `GEMINI_API_KEY` is not needed and `TTS_MODEL` is ignored. Both `speak` and `agent` use it. The model loads once per process (it takes a few seconds on the first sentence). Its 48 kHz output is converted to the same 24 kHz WAV and player format as Gemini. A background thread keeps generating while earlier audio plays. Because the model can be slower than real time, playback waits until enough audio is buffered to finish without gaps. The wait is based on the measured speed and the answer's length (about 18 characters per second of speech). First sound comes after about 1–1.5 s for a short answer and 2.5–4 s for a 3-sentence one. Before this, each chunk played as soon as it arrived and speech came out choppy. The wait is in `CHARS_PER_S` and `MARGIN_S` in [vieneu_tts.py](../../src/reachy_demo/voice/vieneu_tts.py).
 
@@ -59,6 +65,9 @@ To list the voices: `uv run python -c "from vieneu import Vieneu; print(Vieneu()
 | `speech error: Gemini TTS returned 400/403` (exit 1) | The key is wrong or not allowed for this model |
 | `speech error: Gemini TTS returned 429` (exit 1) | Quota or rate limit. Wait and retry |
 | `speech error: TTS_PROVIDER=vieneu needs the package` (exit 1) | `uv sync --extra vieneu` |
+| `speech error: TTS_DEVICE=gpu needs PyTorch` (exit 1) | `uv sync --inexact --extra vieneu-gpu` |
+| `speech error: TTS_DEVICE=gpu but PyTorch sees no CUDA GPU` (exit 1) | Check `nvidia-smi`. Update the NVIDIA driver, or set `TTS_DEVICE=cpu` |
+| `speech error: TTS_DEVICE must be cpu or gpu` (exit 1) | Fix the typo in `.env` |
 | `speech error: VieNeu TTS failed: ...` (exit 1) | The model failed to load or run. Check the voice name and the network on the first download |
 | `speech error: cannot start player 'ffplay.exe' ...` (exit 1) | Install Windows ffmpeg, or set `TTS_PLAYER=none`. The WAV is still saved |
 

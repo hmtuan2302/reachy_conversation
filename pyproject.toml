@@ -20,10 +20,20 @@ perception = ["mediapipe>=0.10", "opencv-python-headless>=4.10"]
 speaker = ["sherpa-onnx>=1.10"]          # speaker-embedding gate
 mic = ["sounddevice>=0.5"]
 vieneu = ["vieneu>=3.7"]                 # local VieNeu-TTS v3 Turbo (TTS_PROVIDER=vieneu)
+vieneu-gpu = ["vieneu[cuda]>=3.8", "torch", "torchaudio"]      # VieNeu on an NVIDIA GPU (TTS_DEVICE=gpu): PyTorch + CUDA 12.6
 embed = [
     "huggingface-hub>=0.25",
     "tokenizers>=0.20",
 ]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", extra = "vieneu-gpu" }]
+torchaudio = [{ index = "pytorch-cu126", extra = "vieneu-gpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"                   # cu126 runs on drivers >= 525 (CUDA 12.x minor-version compat)
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
 
 [project.scripts]
 reachy-demo = "reachy_demo.__main__:main"

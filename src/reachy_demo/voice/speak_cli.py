@@ -15,7 +15,7 @@ from dotenv import find_dotenv, load_dotenv
 
 from reachy_demo.audio.player import DEFAULT_PLAYER, PlayerError, play_and_save, speech_path
 from reachy_demo.voice.tts import DEFAULT_TTS_MODEL, DEFAULT_VOICE, TTSError, speak_stream
-from reachy_demo.voice.vieneu_tts import vieneu_stream
+from reachy_demo.voice.vieneu_tts import vieneu_stream, warm_up
 
 SPEECH_DIR = Path("data/speech")
 
@@ -49,6 +49,8 @@ def speaker_from_env(
     player_cmd = None if player.lower() == "none" else player
     save = os.environ.get("SAVE_SPEECH", "").strip().lower() not in ("off", "0", "false", "no")
     counter = itertools.count(1)
+    if not gemini:
+        warm_up()
 
     async def speak(text: str) -> Path | None:
         cloned = clone is not None and clone.exists()  # noqa: ASYNC240 (one stat, microseconds)

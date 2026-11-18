@@ -101,3 +101,17 @@ async def test_slow_model_holds_audio_until_buffered(monkeypatch: pytest.MonkeyP
         yielded_at.append(time.monotonic() - t0)
     assert len(yielded_at) == 50  # nothing lost
     assert yielded_at[0] > 0.5  # held back until the buffer could cover the slow model
+
+
+@pytest.mark.parametrize(
+    ("raw", "want"), [("", "auto"), ("cpu", "cpu"), ("GPU", "cuda"), (" cuda ", "cuda")]
+)
+def test_device_from_env(monkeypatch: pytest.MonkeyPatch, raw: str, want: str) -> None:
+    monkeypatch.setenv("TTS_DEVICE", raw)
+    assert vieneu_tts.device_from_env() == want
+
+
+def test_device_from_env_rejects_typo(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TTS_DEVICE", "gpuu")
+    with pytest.raises(TTSError, match="cpu or gpu"):
+        vieneu_tts.device_from_env()
