@@ -23,7 +23,8 @@ PROMPT = (
     "target and the coco_class of the same kind (none if no class fits, never a look-alike). "
     "It takes up to 40 seconds. If found, say what you see from 'description' (if given) and "
     "where it is from your point of view ('where', 'height'), then ask if that is the one. "
-    "If the user then says yes, only thank them briefly and call no tool. If they say no, "
+    "You keep looking at it until they answer. If the user then says yes, call find_object "
+    "with confirmed true (you then look back) and thank them briefly. If they say no, "
     "call find_object again with the same target and coco_class and resume true. If "
     "not_found, say you searched all around and couldn't find it. If unsupported_object, "
     "say you can only find everyday objects like a phone, cup, bottle, book or remote."
@@ -57,6 +58,11 @@ class FindTools:
                                 "description": "true only when the user said the object you "
                                 "just found is not the right one: keep searching from there",
                             },
+                            "confirmed": {
+                                "type": "boolean",
+                                "description": "true only when the user said the object you "
+                                "just found is the right one: look back to where you were",
+                            },
                             "coco_class": {
                                 "type": "string",
                                 "enum": [*COCO, NONE],
@@ -82,6 +88,8 @@ class FindTools:
         except json.JSONDecodeError:
             args = {}
         args = args if isinstance(args, dict) else {}
+        if args.get("confirmed") is True:
+            return await self._search.confirm()
         target, label = args.get("target"), args.get("coco_class")
         if not isinstance(target, str) or not target.strip() or not isinstance(label, str):
             return {"error": "bad_arguments: target and coco_class are required"}

@@ -39,7 +39,7 @@ from reachy_demo.agent.tools import sound as sound_tools
 from reachy_demo.agent.tools import voice as voice_tools
 from reachy_demo.attention.follow import Follow
 from reachy_demo.attention.mimic import Mimic
-from reachy_demo.attention.search import MAX_SWEEP_S, MIN_SWEEP_S, SWEEP_S, Search
+from reachy_demo.attention.search import Search
 from reachy_demo.audio.player import PlayerError
 from reachy_demo.audio.sound_events import DEFAULT_LOUD_RMS, SoundEvents, with_sound
 from reachy_demo.audio.vad import EnergyVAD
@@ -59,8 +59,8 @@ from reachy_demo.perception.objects import (
     BoxesDetector,
     ObjectDetector,
     ObjectSource,
+    model_path,
 )
-from reachy_demo.perception.objects import DEFAULT_MODEL as OBJECT_MODEL
 from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
 from reachy_demo.robot.adapter import connect_robot, face_detector, scored_face_detector
 from reachy_demo.robot.dances import load_dances
@@ -494,7 +494,7 @@ def run(args: argparse.Namespace) -> int:
             prompt += f" {track.PROMPT}"
             if robot.has_camera:
                 ask, label = vision_asker(vision, keys, base_url)
-                object_model = Path(os.environ.get("OBJECT_MODEL", "").strip() or OBJECT_MODEL)
+                object_model = model_path(os.environ.get("OBJECT_MODEL", ""))
                 seen = ObjectSource(
                     robot.grab_frame, partial(ObjectDetector, object_model), ask, lag_s=lag_s
                 )
@@ -515,15 +515,12 @@ def run(args: argparse.Namespace) -> int:
                 activities["following an object"] = lambda: (
                     objects is not None and objects[0].active
                 )
-                sweep_s = search_sweep_from_env()
-                if sweep_s is None:
-                    return 2
                 look = Search(
                     motion,
                     robot.grab_frame,
                     partial(ObjectDetector, object_model),
                     ask,
-                    sweep_s=sweep_s,
+                    lag_s=lag_s,
                 )
                 sets.append(find_tools.FindTools(look, speaker=mode.speaker))
                 prompt += f" {find_tools.PROMPT}"
@@ -546,7 +543,7 @@ def run(args: argparse.Namespace) -> int:
                         partial(scored_face_detector, min_score),
                         lambda: None,  # the robot's face tracker is no longer used
                         record_dir=RECORDINGS_DIR,
-                        read_object=lambda: faces.mark() or seen.mark(),
+                        read_object=lambda: faces.mark() or seen.mark() or look.mark(),
                     )
                     print(f"  (debug view: {stack.enter_context(view.serve(args.debug_view))})")
                 sets.append(camera.CameraTools(robot.grab_jpeg, ask))
@@ -646,23 +643,6 @@ def camera_lag_from_env() -> float | None:
         value = -1.0
     if not 0.0 <= value <= 2.0:
         print(f"config error: CAMERA_LAG_S must be 0-2 seconds, got {raw!r}", file=sys.stderr)
-        return None
-    return value
-
-
-def search_sweep_from_env() -> float | None:
-    """find_object's sweep length (SEARCH_SWEEP_S), or None after printing a config error."""
-    raw = os.environ.get("SEARCH_SWEEP_S", "").strip()
-    try:
-        value = float(raw) if raw else SWEEP_S
-    except ValueError:
-        value = -1.0
-    if not MIN_SWEEP_S <= value <= MAX_SWEEP_S:
-        print(
-            f"config error: SEARCH_SWEEP_S must be {MIN_SWEEP_S:g}-{MAX_SWEEP_S:g} seconds, "
-            f"got {raw!r}",
-            file=sys.stderr,
-        )
         return None
     return value
 

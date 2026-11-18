@@ -7,11 +7,11 @@ import numpy as np
 import pytest
 
 from reachy_demo.agent.tools.find import NAME, NOT_OWNER, FindTools
-from reachy_demo.attention.search import SWEEP_S, Search, Sweep, height, path
+from reachy_demo.attention.search import STOPS, Search, height
 from reachy_demo.memory.store import Speaker
 from reachy_demo.perception.head_pose import TAN_HALF_H
-from reachy_demo.perception.objects import Detection, ObjectDetector
-from reachy_demo.robot.motion import BUSY_LONG, NEUTRAL, Motion, Pose, dance
+from reachy_demo.perception.objects import Detection, Mark, ObjectDetector
+from reachy_demo.robot.motion import BUSY_LONG, NEUTRAL, Motion, Pose, dance, goto
 
 pytest.importorskip("cv2")
 
@@ -75,66 +75,9 @@ def _search(
         ask,  # type: ignore[arg-type]
         clock=clock or FakeClock(),
         settle_s=0.0,
-        brake_s=0.0,
+        lag_s=0.0,  # the fake room sees the current pose
     )
     return s, motion, poses, det
-
-
-def test_sweep_path_reaches_both_sides_within_limits_and_starts_and_ends_still() -> None:
-    ts = np.linspace(0, SWEEP_S, 4001)
-    poses = [path(float(t)) for t in ts]
-    yaws = np.array([p["yaw"] for p in poses])
-    assert yaws.max() == pytest.approx(160, abs=0.5) and yaws.min() == pytest.approx(-160, abs=0.5)
-    assert all(abs(p["body_yaw"]) <= 120 + 1e-6 for p in poses)
-    assert all(abs(p["yaw"] - p["body_yaw"]) <= 40 + 1e-6 for p in poses)
-    speed = np.abs(np.diff(yaws)) / (ts[1] - ts[0])
-    assert speed[0] < 1 and speed[-1] < 1  # starts and ends at rest
-    assert speed.max() < 80  # deg/s
-    assert height(25) == "low, below my eye level" and height(0) == "at my eye level"
-
-
-def test_sweep_length_scales_speed_and_is_validated() -> None:
-    slow = [path(float(t), 40.0)["yaw"] for t in np.linspace(0, 40.0, 4001)]
-    speed = np.abs(np.diff(slow)) / 0.01
-    assert speed.max() < 40 and max(slow) == pytest.approx(160, abs=0.5)
-    sweep = Sweep(40.0)
-    sweep.time = 39.9
-    assert not sweep.done
-    sweep.time = 40.0
-    assert sweep.done
-    motion = Motion(lambda p: None, hz=1000)
-    with pytest.raises(ValueError, match="8-120"):
-        Search(motion, lambda: None, ObjectDetector, sweep_s=5.0)
-
-
-def test_sweep_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    from reachy_demo.agent.cli import search_sweep_from_env
-
-    monkeypatch.delenv("SEARCH_SWEEP_S", raising=False)
-    assert search_sweep_from_env() == SWEEP_S
-    monkeypatch.setenv("SEARCH_SWEEP_S", "30")
-    assert search_sweep_from_env() == 30.0
-    for bad in ("3", "abc", "500"):
-        monkeypatch.setenv("SEARCH_SWEEP_S", bad)
-        assert search_sweep_from_env() is None
-
-
-def test_brake_slows_smoothly_and_stops_short() -> None:
-    sweep = Sweep()
-    move = sweep.move()
-    t, yaws = 0.0, []
-    while t < 5.0:
-        yaws.append(move.pose_at(t, dict(NEUTRAL))["yaw"])
-        t += 0.02
-    sweep.brake()
-    for _ in range(60):
-        yaws.append(move.pose_at(t, dict(NEUTRAL))["yaw"])
-        t += 0.02
-    steps = np.abs(np.diff(yaws))
-    braking = steps[len(steps) - 60 :]
-    assert braking[-1] < 0.01  # at rest
-    assert all(b <= a + 1e-9 for a, b in zip(braking, braking[1:], strict=False))  # no jolt
-    assert steps[-61] - braking[0] < 0.3  # speed continuous when the brake starts
 
 
 async def test_finds_in_front_without_asking_and_centres_it() -> None:
@@ -282,3 +225,93 @@ async def test_tool() -> None:
     assert str((await _call(tools, target="x"))["error"]).startswith("bad_arguments")
     guest = FindTools(s, speaker=lambda: Speaker(2, "guest"))
     assert await _call(guest, target="the cup", coco_class="cup") == NOT_OWNER
+
+
+async def test_the_found_object_stays_boxed_and_looked_at_until_confirmed() -> None:
+    marks: list[object] = []
+
+    async def ask(jpeg: bytes, q: str) -> str:
+        marks.append(s.mark())
+        return await _describing(jpeg, q)
+
+    s, motion, poses, _ = _search(110.0, ask)
+    assert s.mark() is None
+    assert (await s.find("my cup", "cup"))["status"] == "found"
+    mark = marks[-1]  # the describe call
+    assert isinstance(mark, Mark) and mark.source == "found" and mark.label == "cup"
+    assert abs(mark.aim[0]) < 0.1  # centred: boxed on a frame after the turn
+    await motion.settled()
+    assert poses[-1]["yaw"] == pytest.approx(110, abs=3)  # still on it
+    assert s.mark() is not None
+    tools = FindTools(s)
+    assert await _call(tools, target="my cup", coco_class="cup", confirmed=True) == {
+        "status": "confirmed"
+    }
+    assert s.mark() is None  # cleared as the head turns back
+    await motion.settled()
+    assert poses[-1] == pytest.approx(NEUTRAL)  # where it was before the search
+    assert (await s.confirm())["status"] == "nothing_found_to_confirm"
+
+
+async def test_unanswered_find_turns_back_by_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("reachy_demo.attention.search.RESUME_S", 0.01)
+    s, motion, poses, _ = _search(0.0, _describing)
+    assert (await s.find("my cup", "cup"))["status"] == "found"
+    assert s._home_later is not None
+    await s._home_later
+    assert s.mark() is None
+    await motion.settled()
+    assert poses[-1] == pytest.approx(NEUTRAL)
+
+
+async def test_the_head_goes_back_to_where_it_was_before_the_search() -> None:
+    s, motion, poses, _ = _search(None)
+    start: Pose = {**NEUTRAL, "yaw": 30.0, "body_yaw": 20.0, "pitch": -5.0}
+    assert motion.submit(goto("before", start, 0.5)) is None
+    await motion.settled()
+    assert (await s.find("the cup", "cup"))["status"] == "not_found"
+    await motion.settled()
+    assert poses[-1] == pytest.approx(start)
+
+
+def test_stops_cover_both_sides_within_reach() -> None:
+    assert STOPS[0] == 0 and max(STOPS) == 160 and min(STOPS) == -160
+    assert all(abs(b - a) <= 40 for a, b in zip(sorted(STOPS), sorted(STOPS)[1:], strict=False))
+    assert height(25) == "low, below my eye level" and height(0) == "at my eye level"
+
+
+async def test_every_look_is_from_a_still_head() -> None:
+    s, motion, poses, det = _search(None)
+    moving: list[bool] = []
+    detect = det.detect
+
+    def watched(bgr: np.ndarray, label: str | None = None) -> list[Detection]:
+        moving.append(motion.planned() != motion.pose)
+        return detect(bgr, label)
+
+    det.detect = watched  # type: ignore[method-assign]
+    assert (await s.find("the cup", "cup"))["status"] == "not_found"
+    assert moving and not any(moving)
+    assert all(abs(p["body_yaw"]) <= 120 + 1e-6 for p in poses)
+    assert all(abs(p["yaw"] - p["body_yaw"]) <= 45 + 1e-6 for p in poses)
+
+
+async def test_a_vision_outage_trusts_the_detector() -> None:
+    async def down(jpeg: bytes, q: str) -> str:
+        raise ConnectionError("session allocator returned 429")
+
+    s, *_ = _search(0.0, down)
+    result = await s.find("my cup", "cup")  # "my" always asks the vision model
+    assert result["status"] == "found" and "description" not in result
+
+
+async def test_the_pick_question_ignores_ownership() -> None:
+    questions: list[str] = []
+
+    async def ask(jpeg: bytes, q: str) -> str:
+        questions.append(q)
+        return "a cup" if q.startswith("Describe") else "1"
+
+    s, *_ = _search(0.0, ask)
+    assert (await s.find("my cup", "cup"))["status"] == "found"
+    assert "ignore words like 'my'" in questions[0]

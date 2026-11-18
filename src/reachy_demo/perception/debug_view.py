@@ -8,6 +8,8 @@ windows). Each frame shows:
 - red cross: the daemon's tracked face (`/api/media/tracking/face`), what attention/follow.py
   steers by. It shows only while tracking runs ("track me"), since only then is the detector on;
 - grey cross: the image centre, where tracking tries to put the face;
+- find object ("find my phone"): blue for a hit during the sweep, magenta for the found object
+  (kept 10 s);
 - object tracking ("track my phone"): its box with class and detector score, blue when YOLOX
   found it on this read, yellow when CSRT bridges a frame YOLOX missed, and a cross of the same
   colour at the smoothed aim point the head steers by.
@@ -43,7 +45,8 @@ Box = tuple[float, float, float, float]  # x, y (top left), w, h in pixels
 Scored = tuple[Box, float]  # a box and its confidence, 0-1 (NaN: unknown)
 RECORD_FPS = 15
 LABEL_SCALE = 1.2  # confidence text size (cv2 font scale)
-OBJECT_COLOURS = {"yolox": (255, 128, 0), "csrt": (0, 255, 255)}  # BGR: blue, yellow
+OBJECT_COLOURS = {"yolox": (255, 128, 0), "csrt": (0, 255, 255), "found": (255, 0, 255)}
+# BGR: blue, yellow, magenta (find_object's found object)
 CHAT_LINES = 200  # shortcut: older lines drop off the page; the terminal keeps them all
 PAGE = b"""<!doctype html><meta charset=utf-8><title>Reachy debug view</title>
 <style>
@@ -54,7 +57,8 @@ body{margin:0;background:#111;color:#ccc;font:14px sans-serif;display:flex;flex-
 </style>
 <div id=cam><img src=/stream><p>green: laptop YuNet (this frame) &middot;
 red: daemon face target (only while tracking) &middot; grey: centre &middot;
-blue/yellow: tracked object, YOLOX/CSRT (only while tracking an object)</p></div>
+blue/yellow: tracked object, YOLOX/CSRT &middot;
+blue/magenta: find object, sweep hit/found</p></div>
 <div id=chat></div>
 <script>
 const chat = document.getElementById("chat");

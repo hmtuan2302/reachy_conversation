@@ -10,6 +10,7 @@ import contextlib
 import json
 import logging
 import math
+import threading
 import time
 import urllib.request
 from collections.abc import Callable, Iterator
@@ -25,6 +26,8 @@ WAKE_S = 2.0  # rest pose -> neutral at startup
 REST_S = 2.0  # neutral -> rest pose at exit
 DAEMON_PORT = 8000  # the daemon's REST API (ReachyMini's default port)
 DOA_TIMEOUT_S = 0.5
+FRAME_WAIT_S = 1.0  # a caller waits this long for a fresh frame before getting None
+FRAME_STALE_S = 0.5  # an older frame counts as absent (stale perception)
 # The daemon's face tracker steers the head itself with this blend weight. 1 = it owns the head
 # orientation while on (as the reference conversation app does: on-robot, no Wi-Fi lag); our
 # targets still set the body yaw. 0 would pause its detector.
@@ -170,6 +173,51 @@ class Robot:
     set_face_tracking: Callable[[bool], bool]  # daemon face detector on/off
 
 
+class LatestFrame:
+    """The camera's one reader: a thread keeps the newest frame, and every caller gets it.
+
+    The SDK's video sink holds one frame, and a pull takes it away. With several readers (the
+    search, the debug view) each got an uneven share of the frames, and the view stuttered.
+    Callers share the array: draw on a copy.
+    """
+
+    def __init__(self, read: Callable[[], Any], clock: Callable[[], float] = time.monotonic):
+        self._read = read  # blocks up to ~20 ms (SDK), None when no frame came
+        self._clock = clock
+        self._frame: tuple[float, Any] | None = None  # (clock time, frame)
+        self._new = threading.Condition()
+        self._stop = threading.Event()
+
+    def run(self) -> None:
+        """Pull frames until `stop()`; run it in its own thread."""
+        while not self._stop.is_set():
+            try:
+                frame = self._read()
+            except Exception as e:  # noqa: BLE001 - fail small: a bad pull skips one frame
+                log.warning("camera read failed: %s", e)
+                self._stop.wait(0.1)
+                continue
+            if frame is not None:
+                with self._new:
+                    self._frame = (self._clock(), frame)
+                    self._new.notify_all()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def get(self, wait_s: float = FRAME_WAIT_S, stale_s: float = FRAME_STALE_S) -> Any:
+        """The newest frame; waits up to `wait_s` for one under `stale_s` old, else None."""
+
+        def fresh() -> bool:
+            return self._frame is not None and self._clock() - self._frame[0] <= stale_s
+
+        with self._new:
+            if not self._new.wait_for(fresh, timeout=wait_s):
+                return None
+            assert self._frame is not None
+            return self._frame[1]
+
+
 def _open(host: str, camera: bool) -> Any:
     from reachy_mini import ReachyMini  # lazy: the SDK is the optional `robot` extra
 
@@ -220,11 +268,29 @@ def connect_robot(host: str, camera: bool = True) -> Iterator[Robot]:
                 head=head(p), antennas=antennas(p), body_yaw=math.radians(p["body_yaw"])
             )
 
+        frames = LatestFrame(mini.media.get_frame)
+        if has_camera:
+            reader = threading.Thread(target=frames.run, name="camera", daemon=True)
+            reader.start()
+            stack.callback(reader.join, 1.0)
+            stack.callback(frames.stop)
+
         def grab_frame() -> Any:
-            return mini.media.get_frame() if has_camera else None
+            return frames.get() if has_camera else None
 
         def grab_jpeg() -> bytes | None:
-            return mini.media.get_frame_jpeg() if has_camera else None
+            if not has_camera:
+                return None
+            try:
+                import cv2  # the `perception` extra
+            except ImportError:  # the SDK's encoder pulls its own frame from the shared sink
+                jpeg: bytes | None = mini.media.get_frame_jpeg()
+                return jpeg
+            frame = frames.get()
+            if frame is None:
+                return None
+            ok, jpg = cv2.imencode(".jpg", frame)
+            return bytes(jpg.tobytes()) if ok else None
 
         try:
             # Torque-off from a previous exit stays on the robot; targets are ignored until

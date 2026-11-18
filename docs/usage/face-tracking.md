@@ -52,6 +52,7 @@ Open http://127.0.0.1:8090/ in a browser (from Windows too: WSL2 forwards localh
 - **blue/yellow box labelled `face`**: the face tracking follows, blue when YuNet found it on this read, yellow when CSRT covers a miss. The cross of the same colour is the smoothed aim point. It shows only while tracking runs ("track me").
 - **grey cross**: the image centre, where tracking tries to put your face.
 - **blue/yellow box and cross**: the object being tracked ("track my phone"). See [object-tracking.md § Debug view](object-tracking.md#debug-view).
+- **blue/magenta box**: find object ("find my phone"): blue for a hit at a stop, magenta for the found object (until you say yes, or 60 s). See [find-object.md](find-object.md).
 - top line: frames per second, and the number of faces (green boxes).
 - **chat panel** (right, or below on a narrow window): the conversation as `you:` / `bot:` lines, without context blocks or status lines. It keeps the last 200 lines and refreshes every second.
 

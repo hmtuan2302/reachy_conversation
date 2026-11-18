@@ -6,14 +6,13 @@ Reachy follows an object with its head and body until you say stop: a phone in y
 
 ```bash
 uv sync --inexact --extra perception      # OpenCV (keeps your other extras)
-mkdir -p models/yolox
-curl -L -o models/yolox/yolox_nano.onnx \
-  https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.onnx
 ```
+
+The model downloads by itself the first time it is used (into `models/yolox/`, from the [YOLOX release](https://github.com/Megvii-BaseDetection/YOLOX/releases/tag/0.1.1rc0)). The first track or find then waits for the download: 3.6 MB for nano, up to about 400 MB for `x`.
 
 ### Another model size
 
-Set `OBJECT_MODEL` in `.env` to any YOLOX COCO ONNX from the [YOLOX releases](https://github.com/Megvii-BaseDetection/YOLOX/releases/tag/0.1.1rc0). The input size is read from the model.
+Set `OBJECT_MODEL` in `.env` to a size name: `nano` (default), `tiny`, `s`, `m`, `l` or `x`. A missing model downloads by itself on first use. You can also give the path of any YOLOX COCO ONNX; a path that isn't a YOLOX release file is never downloaded. The input size is read from the model.
 
 | Model | Input | Size | Notes |
 |---|---|---|---|
@@ -22,10 +21,8 @@ Set `OBJECT_MODEL` in `.env` to any YOLOX COCO ONNX from the [YOLOX releases](ht
 | `yolox_s.onnx` | 640 | 36 MB | Better on small objects (a phone far away), about 5x slower |
 
 ```bash
-curl -L -o models/yolox/yolox_tiny.onnx \
-  https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_tiny.onnx
 # .env
-OBJECT_MODEL=models/yolox/yolox_tiny.onnx
+OBJECT_MODEL=tiny        # same as models/yolox/yolox_tiny.onnx
 ```
 
 Only YOLOX models work. Ultralytics YOLOv8/YOLO11 exports have a different output format and are refused at load: `... is not a YOLOX COCO model`.
@@ -98,7 +95,8 @@ No box means it is not seen right now. A box older than 0.5 s is not drawn. Many
 
 | You hear / see | Meaning and fix |
 |---|---|
-| `tracking_unavailable: object model missing: ...` | Download the model (see Setup), or fix `OBJECT_MODEL` |
+| `tracking_unavailable: object model missing: ...` | `OBJECT_MODEL` is a path to a file that isn't there: fix it, or use a size name |
+| `tracking_unavailable: object model ... download failed: ...` | No internet, or GitHub unreachable: retry, or download the file by hand into `models/yolox/` |
 | `tracking_unavailable: ... is not a YOLOX COCO model` | `OBJECT_MODEL` points to a non-YOLOX model |
 | `unsupported_object: ...` | That object is not one of the 80 classes |
 | `target read failed (skipping)` in the log | One camera frame failed. Tracking keeps going |

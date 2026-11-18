@@ -35,9 +35,8 @@ import numpy.typing as npt
 log = logging.getLogger(__name__)
 
 DEFAULT_MODEL = Path("models/yolox/yolox_nano.onnx")
-MODEL_URL = (
-    "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_nano.onnx"
-)
+RELEASE_URL = "https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0"
+YOLOX_SIZES = ("nano", "tiny", "s", "m", "l", "x")  # OBJECT_MODEL short names, small to big
 COCO = (
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
     "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog",
@@ -146,14 +145,46 @@ def decode(
     ]
 
 
+def model_path(value: str) -> Path:
+    """OBJECT_MODEL as a path: a short name ("tiny") means models/yolox/yolox_tiny.onnx."""
+    value = value.strip()
+    if not value:
+        return DEFAULT_MODEL
+    if value.lower() in YOLOX_SIZES:
+        return DEFAULT_MODEL.with_name(f"yolox_{value.lower()}.onnx")
+    return Path(value)
+
+
+def fetch_model(model: Path) -> None:
+    """Download a missing official YOLOX model (yolox_<size>.onnx) from the YOLOX release."""
+    if model.is_file():
+        return
+    known = {f"yolox_{n}.onnx" for n in YOLOX_SIZES}
+    if model.name not in known:
+        raise FileNotFoundError(
+            f"object model missing: {model}. Use one of {', '.join(YOLOX_SIZES)} "
+            "(downloaded automatically) or the path of a YOLOX COCO ONNX file"
+        )
+    import urllib.request
+
+    url = f"{RELEASE_URL}/{model.name}"
+    log.info("downloading object model %s from %s", model.name, url)
+    model.parent.mkdir(parents=True, exist_ok=True)
+    part = model.with_suffix(".part")
+    try:
+        urllib.request.urlretrieve(url, part)  # noqa: S310 - a fixed https URL
+        part.replace(model)  # whole file or nothing: a cut download isn't left as the model
+    except OSError as e:
+        part.unlink(missing_ok=True)
+        raise FileNotFoundError(f"object model {model.name} download failed: {e}") from e
+    log.info("object model saved: %s", model)
+
+
 class ObjectDetector:
     """YOLOX-nano on one CPU thread (leaves the rest to speech and the motion loop)."""
 
     def __init__(self, model: Path = DEFAULT_MODEL) -> None:
-        if not model.is_file():
-            raise FileNotFoundError(
-                f"object model missing: {model}. Download it: curl -L -o {model} {MODEL_URL}"
-            )
+        fetch_model(model)
         import onnxruntime as ort
 
         options = ort.SessionOptions()
@@ -212,9 +243,11 @@ def detect_tiled(detector: ObjectDetector, bgr: Frame, label: str) -> list[Detec
 
 
 async def choose(ask: Ask, frame: Frame, found: list[Detection], target: str) -> Detection | None:
-    """Ask the vision model which numbered box is `target`; None if none is, or it can't tell.
+    """Ask the vision model which numbered box is `target`; None if it says none is.
 
     With one box this is a yes/no check, which weeds out look-alikes (a remote for a phone).
+    If the vision model can't be reached (rate limit, network), the detector's best box is
+    returned: a missing check must not throw away a real hit.
     """
     import cv2
 
@@ -228,15 +261,18 @@ async def choose(ask: Ask, frame: Frame, found: list[Detection], target: str) ->
         return None
     question = (
         f"Green numbered boxes mark objects. Which box contains {target}? "
+        "Who owns it can't be seen in a photo, so ignore words like 'my' or 'mine', "
+        "but do use any colour, brand or other detail given. "
         "Answer with the number only, or 0 if none."
     )
     try:
         answer = await ask(jpeg.tobytes(), question)
-    except Exception as e:  # noqa: BLE001 - fail small: the caller falls back
-        log.warning("vision pick failed: %s", e)
-        return None
+    except Exception as e:  # noqa: BLE001 - fail small: trust the detector
+        log.warning("vision pick failed, using the detector's best box: %s", e)
+        return max(found, key=lambda d: d.score)
     m = re.search(r"\d+", answer)
     n = int(m.group()) if m else 0
+    log.info("vision pick for %s among %d boxes: %r", target, len(found), answer[:80])
     return found[n - 1] if 1 <= n <= len(found) else None
 
 
