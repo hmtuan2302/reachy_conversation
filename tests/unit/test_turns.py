@@ -67,7 +67,13 @@ def test_lead_in_kept() -> None:
 def test_short_blip_is_not_a_turn() -> None:
     calls: list[int] = []
     det = TurnDetector(TurnSettings(), recorder(calls, 1.0))
-    assert run(det, speech(160) + silence(2500)) == [] and calls == []
+    assert run(det, speech(64) + silence(2500)) == [] and calls == []
+
+
+def test_short_stop_word_is_a_turn() -> None:
+    # a spoken "stop" gives Silero only ~160 ms of speech frames
+    det = TurnDetector(TurnSettings(), lambda a: 1.0)
+    assert len(run(det, speech(160) + silence(224))) == 1
 
 
 def test_flush_returns_open_turn() -> None:

@@ -25,7 +25,7 @@ class TurnSettings:
     turn_threshold: float = 0.5
     max_silence_ms: int = 2000
     lead_ms: int = 300
-    min_speech_ms: int = 250
+    min_speech_ms: int = 96  # 3 Silero frames: drops clicks, keeps a short "stop" (~160 ms)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> TurnSettings:

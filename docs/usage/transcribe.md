@@ -176,7 +176,7 @@ The first run downloads Whisper `large-v3-turbo` (about 1.6 GB, to the Hugging F
 3. A score of at least `STT_TURN_THRESHOLD` ends the turn: Whisper transcribes it, choosing Vietnamese or English by itself.
 4. Below that, it keeps listening. Speaking again continues the same turn; `STT_MAX_SILENCE_MS` of silence ends it anyway.
 
-Sounds shorter than 250 ms of speech (a cough, a click) are ignored.
+Sounds shorter than about 100 ms of speech (a click, a tap) are ignored. A short "stop" (about 160 ms) still counts.
 
 **Tuning:**
 
