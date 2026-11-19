@@ -27,7 +27,7 @@ bot: Hanoi winters are usually cool and quite humid, ...
 The same setup as [transcribe](transcribe.md), plus a DeepSeek key. In `.env` at the repo root:
 
 ```
-HF_TOKEN=hf_...              # speech → text (Pollen's Hugging Face server)
+HF_TOKEN=hf_...              # speech → text (Pollen's Hugging Face server); not needed with STT_PROVIDER=local
 DEEPSEEK_API_KEY=sk-...      # the LLM; get one at platform.deepseek.com
 # LLM_MODEL=deepseek-chat    # optional: deepseek-chat (default, fastest) | deepseek-v4-pro (stronger, thinks first, slower)
 # LLM_BASE_URL=https://api.deepseek.com   # optional: any OpenAI-compatible endpoint

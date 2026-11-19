@@ -132,3 +132,26 @@ def test_file_input_is_not_re_recorded(monkeypatch: pytest.MonkeyPatch, tmp_path
     monkeypatch.chdir(tmp_path)
     assert transcribe_cli.run(_args(file=wav_file)) == 0
     assert not (tmp_path / "data" / "recordings").exists()
+
+
+def test_local_provider_needs_no_hf_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake(pcm: AsyncIterator[bytes], **kw: Any) -> AsyncIterator[str]:
+        async for _ in pcm:
+            pass
+        yield "xin chào"
+
+    monkeypatch.delenv("HF_TOKEN")
+    monkeypatch.setenv("STT_PROVIDER", "local")
+    monkeypatch.setattr(transcribe_cli, "transcribe_local", fake)
+    assert transcribe_cli.run(_args(file=_wav(tmp_path))) == 0
+    assert capsys.readouterr().out == "xin chào\n"
+
+
+def test_bad_stt_provider_exits_2(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("STT_PROVIDER", "whisper")
+    assert transcribe_cli.run(_args(file=_wav(tmp_path))) == 2
+    assert "STT_PROVIDER" in capsys.readouterr().err

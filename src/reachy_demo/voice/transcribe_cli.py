@@ -13,6 +13,7 @@ from typing import Any
 from dotenv import find_dotenv, load_dotenv
 
 from reachy_demo.audio.sources import Recording, mic_chunks, stdin_chunks, wav_chunks
+from reachy_demo.voice.local_stt import transcribe_local
 from reachy_demo.voice.transcribe import transcribe_stream
 
 
@@ -58,6 +59,26 @@ def save_recording(args: argparse.Namespace, rec: Recording | None) -> None:
         print(f"recording saved: {path}", file=sys.stderr)
 
 
+STT_PROVIDERS = ("hf", "local")
+
+
+def stt_provider() -> str | None:
+    """STT_PROVIDER: hf (default, Pollen HF server) | local. None after printing a config error."""
+    provider = os.environ.get("STT_PROVIDER", "").strip().lower() or "hf"
+    if provider not in STT_PROVIDERS:
+        print(
+            f"config error: STT_PROVIDER must be one of {', '.join(STT_PROVIDERS)}, "
+            f"got {provider!r}",
+            file=sys.stderr,
+        )
+        return None
+    return provider
+
+
+def local_notice() -> None:
+    print("  (loading local speech model...)", file=sys.stderr)
+
+
 def run_until_done(main: Coroutine[Any, Any, None]) -> int:
     """Run a pipeline and map its failures to exit codes (0 ok/Ctrl-C, 1 network, 2 input)."""
     try:
@@ -85,8 +106,10 @@ async def _print_lines(lines: AsyncIterator[str]) -> None:
 
 def run(args: argparse.Namespace) -> int:
     load_dotenv(find_dotenv(usecwd=True))  # .env of the folder you run from
+    if (provider := stt_provider()) is None:
+        return 2
     token = os.environ.get("HF_TOKEN", "").strip()
-    if not token:
+    if provider == "hf" and not token:
         print("config error: HF_TOKEN is required", file=sys.stderr)
         return 2
     try:
@@ -95,6 +118,13 @@ def run(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 2
     source, rec = recorded(args, source)
-    code = run_until_done(_print_lines(transcribe_stream(source, hf_token=token)))
+    if provider == "local":
+        local_notice()
+    lines = (
+        transcribe_local(source)
+        if provider == "local"
+        else transcribe_stream(source, hf_token=token)
+    )
+    code = run_until_done(_print_lines(lines))
     save_recording(args, rec)  # also after Ctrl-C or an error: that's when it's most useful
     return code

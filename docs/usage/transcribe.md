@@ -9,6 +9,8 @@ Glue the sheet to the dark blue background.
 ...
 ```
 
+By default it uses Pollen's Hugging Face server. Set `STT_PROVIDER=local` to run it on the laptop instead (see [Local provider](#local-provider-stt_providerlocal)).
+
 ## Setup (once)
 
 ```bash
@@ -149,7 +151,50 @@ If it plays back as silence, the mic route isn't delivering sound (see the mic s
 | 1 | `session allocator returned 401 ... token_invalid` | The token is wrong or expired. Make a new one on huggingface.co → Settings → Access Tokens |
 | 1 | `transcription connection failed` / `socket closed` | Network or server problem. Retry |
 
+## Local provider (`STT_PROVIDER=local`)
+
+Runs on the laptop, with no network after the first model download and no `HF_TOKEN`. Vietnamese or English, one language per sentence (mixed sentences are not supported).
+
+```bash
+uv sync --extra stt              # plus the extras you already use, e.g. --extra mic --extra vieneu-gpu
+```
+
+In `.env`:
+
+```
+STT_PROVIDER=local
+STT_MODEL=large-v3-turbo         # faster-whisper model name or a local folder
+STT_DEVICE=                      # cpu | gpu; empty = GPU if found, else CPU
+```
+
+The first run downloads Whisper `large-v3-turbo` (about 1.6 GB, to the Hugging Face cache) and `smart-turn-v3.2-cpu.onnx` (to `models/smart-turn/`). Loading takes a few seconds at startup.
+
+**How a turn ends:**
+
+1. Silero VAD checks every 32 ms whether you are speaking (speech starts at `VAD_THRESHOLD`, default 0.5).
+2. After `STT_PAUSE_MS` of silence, Smart Turn v3.2 listens to the last 8 s of your voice (intonation, rhythm, trailing "ờ…", "and…") and scores 0 to 1 how likely you are finished.
+3. A score of at least `STT_TURN_THRESHOLD` ends the turn: Whisper transcribes it, choosing Vietnamese or English by itself.
+4. Below that, it keeps listening. Speaking again continues the same turn; `STT_MAX_SILENCE_MS` of silence ends it anyway.
+
+Sounds shorter than 250 ms of speech (a cough, a click) are ignored.
+
+**Tuning:**
+
+| Setting | Default | Raise it when | Lower it when |
+|---|---|---|---|
+| `STT_PAUSE_MS` | 200 | Tiny gaps between words trigger checks | You want replies a little sooner |
+| `STT_TURN_THRESHOLD` | 0.5 | Reachy cuts you off while you think | Replies wait too long after a finished sentence |
+| `STT_MAX_SILENCE_MS` | 2000 | You need longer thinking pauses | "Unfinished-sounding" sentences wait too long |
+
+After you stop speaking: about 0.2 s plus Whisper when Smart Turn says done, about 2 s plus Whisper when it doesn't.
+
+**Measured** (RTX 3060 Laptop, WSL2): Whisper about 0.55 s per sentence on GPU (`int8_float16`), Smart Turn about 130 ms on CPU.
+
+**GPU libraries:** Whisper on GPU needs cuBLAS 12 and cuDNN 9. The app loads them from the pip `nvidia-*` packages that the `vieneu-gpu` extra installs with PyTorch. Without them, startup fails with `error: Whisper failed to load on cuda: ... Try STT_DEVICE=cpu`. Set `STT_DEVICE=cpu` (slower, about 1–3 s per sentence), or install the `vieneu-gpu` extra.
+
 ## How it works
+
+With `STT_PROVIDER=hf` (the default):
 
 1. The command asks Pollen's Reachy session service (`pollen-robotics-reachy-mini-realtime-url.hf.space`) for a server, using your HF token. This is the same backend that `reachy_mini_conversation_app` uses.
 2. Audio is converted to 24 kHz mono PCM16 and streamed in 200 ms chunks over the realtime WebSocket. The app adds 0.5 s of silence before your audio and 2 s after it. The server's speech detector misses speech that starts at the very first sample (a short "hello" clip returned nothing without the lead-in), and it needs the trailing silence to know the last sentence has ended.
@@ -161,4 +206,5 @@ Your audio leaves your machine and goes to Pollen's Hugging Face endpoint.
 
 - No live partial text while you speak. Each line appears when the sentence ends.
 - English is verified. Vietnamese should work, since the speech recognizer is multilingual, but hasn't been checked yet. Please try it with `--mic`.
-- Code: [src/reachy_demo/voice/transcribe.py](../../src/reachy_demo/voice/transcribe.py), [src/reachy_demo/voice/transcribe_cli.py](../../src/reachy_demo/voice/transcribe_cli.py), [src/reachy_demo/audio/sources.py](../../src/reachy_demo/audio/sources.py).
+- Local provider: the turn detector has no published Vietnamese accuracy figures. Short one- or two-word clips are the least reliable.
+- Code: [src/reachy_demo/voice/local_stt.py](../../src/reachy_demo/voice/local_stt.py), [src/reachy_demo/voice/turns.py](../../src/reachy_demo/voice/turns.py), [src/reachy_demo/voice/transcribe.py](../../src/reachy_demo/voice/transcribe.py), [src/reachy_demo/voice/transcribe_cli.py](../../src/reachy_demo/voice/transcribe_cli.py), [src/reachy_demo/audio/sources.py](../../src/reachy_demo/audio/sources.py).

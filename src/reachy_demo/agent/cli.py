@@ -65,6 +65,7 @@ from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
 from reachy_demo.robot.adapter import connect_robot, face_detector, scored_face_detector
 from reachy_demo.robot.dances import load_dances
 from reachy_demo.robot.motion import Motion
+from reachy_demo.voice.local_stt import transcribe_local
 from reachy_demo.voice.speak_cli import speaker_from_env, uses_gemini
 from reachy_demo.voice.speaker_id import (
     DEFAULT_HIGH,
@@ -78,10 +79,12 @@ from reachy_demo.voice.transcribe import transcribe_stream
 from reachy_demo.voice.transcribe_cli import (
     RECORDINGS_DIR,
     add_source_args,
+    local_notice,
     recorded,
     run_until_done,
     save_recording,
     source_from_args,
+    stt_provider,
 )
 from reachy_demo.voice.tts import TTSError
 
@@ -316,6 +319,8 @@ def run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    if (stt := stt_provider()) is None:
+        return 2
     context_max = _positive_int("CONTEXT_MAX_TOKENS", DEFAULT_CONTEXT_TOKENS)
     memory_max = _positive_int("MEMORY_MAX_TOKENS", DEFAULT_MEMORY_TOKENS)
     if context_max is None or memory_max is None:
@@ -328,7 +333,7 @@ def run(args: argparse.Namespace) -> int:
         )
         return 2
     # HF_TOKEN: speech-to-text, and the camera's vision model when it runs on the HF server.
-    needs_hf = not args.type or (args.robot and vision == "hf")
+    needs_hf = (not args.type and stt == "hf") or (args.robot and vision == "hf")
     needed = (["HF_TOKEN"] if needs_hf else []) + ["DEEPSEEK_API_KEY"]
     needed += ["GEMINI_API_KEY"] if not args.no_speak and uses_gemini() else []
     needed += ["ROBOT_HOST"] if args.robot else []
@@ -370,7 +375,13 @@ def run(args: argparse.Namespace) -> int:
         turns = typed_turns(sys.stdin)
     else:
         audio, rec = recorded(args, _tap(source, vad, speech, sound or None, gate))
-        turns = transcribe_stream(audio, hf_token=keys["HF_TOKEN"])
+        if stt == "local":
+            local_notice()
+        turns = (
+            transcribe_local(audio)
+            if stt == "local"
+            else transcribe_stream(audio, hf_token=keys["HF_TOKEN"])
+        )
     speak = (
         None
         if args.no_speak

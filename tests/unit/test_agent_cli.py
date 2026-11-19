@@ -588,3 +588,36 @@ def test_robot_status_lists_only_running_moves() -> None:
     assert cli.robot_status(on).startswith("[robot] Right now you are following the user.")
     off = {"following the user": lambda: False}
     assert "not following or mimicking anyone" in cli.robot_status(off)
+
+
+def test_agent_local_stt_needs_no_hf_token(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.setenv("STT_PROVIDER", "local")
+
+    async def fake_local(_pcm: Any, **kw: Any) -> AsyncIterator[str]:
+        yield "Hello."
+
+    async def fake_chat(messages: list[dict[str, str]], **kw: Any) -> AsyncIterator[str]:
+        yield "Hi!"
+
+    monkeypatch.setattr(cli, "transcribe_local", fake_local)
+    monkeypatch.setattr(cli, "chat_events", fake_chat)
+    monkeypatch.setattr(cli, "source_from_args", lambda _a: _turns())
+    monkeypatch.setattr(cli, "speaker_gate_from_env", lambda: None)
+    assert cli.run(_args()) == 0
+    assert capsys.readouterr().out == "you: Hello.\nbot: Hi!\n"
+
+
+def test_agent_bad_stt_provider_exits_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.setenv("STT_PROVIDER", "moonshine")
+    assert cli.run(_args()) == 2
+    assert "STT_PROVIDER" in capsys.readouterr().err
