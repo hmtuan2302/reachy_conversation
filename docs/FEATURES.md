@@ -4,7 +4,7 @@ A one-page summary of everything `reachy-demo` can do. Details, setup and errors
 
 **Keep this file current:** every commit that adds or changes a feature updates its row here, and its usage doc.
 
-Last updated: 2026-11-19 (branch `feat/local-stt`: local speech-to-text with `STT_PROVIDER=local`: Silero VAD, Smart Turn v3.2 turn detection, faster-whisper `large-v3-turbo` on GPU, Vietnamese or English per sentence, no `HF_TOKEN` needed; a short spoken "stop" is no longer dropped as noise; the agent greets once startup has finished).
+Last updated: 2026-11-19 (branch `feat/local-stt`, merged into `main`: local speech-to-text with `STT_PROVIDER=local`: Silero VAD, Smart Turn v3.2 turn detection, faster-whisper `large-v3-turbo` on GPU, Vietnamese or English per sentence, no `HF_TOKEN` needed; a short spoken "stop" is no longer dropped as noise; the agent greets once startup has finished).
 
 ## Commands
 
@@ -50,6 +50,6 @@ From the roadmap in [src/CLAUDE.md](../src/CLAUDE.md): greeting, emotion-aware r
 | `main` | Features 1–17 |
 | `feat/doa-speaker-verification` | Merged into `main` |
 | `feat/video-tracking` | Merged into `main` |
-| `feat/local-stt` | Local speech-to-text (`STT_PROVIDER=local`) |
+| `feat/local-stt` | Merged into `main` (local speech-to-text, startup greeting, VieNeu on GPU) |
 
 uv sync --extra stt --extra robot --extra perception --extra speaker --extra mic --extra vieneu-gpu --extra embed
