@@ -4,7 +4,7 @@ A one-page summary of everything `reachy-demo` can do. Details, setup and errors
 
 **Keep this file current:** every commit that adds or changes a feature updates its row here, and its usage doc.
 
-Last updated: 2026-11-19 (branch `feat/local-stt`: local speech-to-text with `STT_PROVIDER=local`: Silero VAD, Smart Turn v3.2 turn detection, faster-whisper `large-v3-turbo` on GPU, Vietnamese or English per sentence, no `HF_TOKEN` needed).
+Last updated: 2026-11-19 (branch `feat/local-stt`: local speech-to-text with `STT_PROVIDER=local`: Silero VAD, Smart Turn v3.2 turn detection, faster-whisper `large-v3-turbo` on GPU, Vietnamese or English per sentence, no `HF_TOKEN` needed; a short spoken "stop" is no longer dropped as noise; the agent greets once startup has finished).
 
 ## Commands
 
@@ -22,7 +22,7 @@ Last updated: 2026-11-19 (branch `feat/local-stt`: local speech-to-text with `ST
 | # | Feature | What you get | Key settings | Doc |
 |---|---|---|---|---|
 | 1 | **Live transcribe** | One line of text per finished sentence, Vietnamese or English (auto-detected). Input from WSLg mic, Windows `ffmpeg.exe` piped to `--stdin` (best on WSL), or a WAV. Uses Pollen's HF realtime server, or with `STT_PROVIDER=local` runs on the laptop: Silero VAD, Smart Turn v3.2 (waits through thinking pauses, ends about 0.2 s after a finished sentence), faster-whisper `large-v3-turbo` on GPU (about 0.55 s per sentence). Saves what it heard to `data/recordings/` on exit. | `HF_TOKEN`, `STT_PROVIDER`, `STT_MODEL`, `STT_DEVICE`, `STT_PAUSE_MS`, `STT_TURN_THRESHOLD`, `STT_MAX_SILENCE_MS` | [transcribe.md](usage/transcribe.md) |
-| 2 | **Voice agent** | Speech → DeepSeek → spoken answer. Answers in your language, max 3 sentences, plain text. Keeps the last 10 Q/A. `--type` to type instead of speak. | `DEEPSEEK_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL` | [agent.md](usage/agent.md) |
+| 2 | **Voice agent** | Speech → DeepSeek → spoken answer. Answers in your language, max 3 sentences, plain text. Keeps the last 10 Q/A. `--type` to type instead of speak. Once startup has finished, says "Hi, I'm Reachy Mini, nice to meet you." | `DEEPSEEK_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL` | [agent.md](usage/agent.md) |
 | 3 | **Text to speech** | Gemini streaming TTS (about 1 s to first sound), or local **VieNeu-TTS v3 Turbo** (no key) on CPU or NVIDIA GPU (`TTS_DEVICE`). On CPU it buffers first, so speech plays without gaps (first sound after about 1–4 s). On GPU, first sound after about 0.3–0.7 s; the model loads and warms up at startup. Each answer saved to `data/speech/`. Played through Windows `ffplay.exe`. | `GEMINI_API_KEY`, `TTS_PROVIDER`, `TTS_DEVICE`, `TTS_VOICE`, `TTS_PLAYER`, `SAVE_SPEECH` | [speak.md](usage/speak.md) |
 | 4 | **Barge-in** | When you talk, playback ducks to 25%. A spoken stop ("stop", "thôi", "dừng lại", any wording) cancels text, speech and moves. A bare stop phrase stops at once. Longer turns go to a fast DeepSeek check. "Stop, <question>" stops, then answers; "stop tracking and mimic me" stops, then switches. Other side talk is dropped. | `VAD_RMS` | [agent.md § Interrupting](usage/agent.md#interrupting) |
 | 5 | **Head motion and dances** (`--robot`) | Tools `turn_head`, `tilt_head`, `roll_head` (fixed angles), `dance` (20 Pollen library moves, max 15 s), `stop_head`. One motion loop (about 50 Hz) is the only sender of poses. Every pose is clamped to safety limits. Moves are queued, and new moves are refused while dancing. Can move and talk at the same time. On exit the head goes to the sleep pose, then motors turn off. | `ROBOT_HOST` | [agent.md § Moving the head](usage/agent.md#moving-the-head-and-dancing---robot) |
@@ -51,3 +51,5 @@ From the roadmap in [src/CLAUDE.md](../src/CLAUDE.md): greeting, emotion-aware r
 | `feat/doa-speaker-verification` | Merged into `main` |
 | `feat/video-tracking` | Merged into `main` |
 | `feat/local-stt` | Local speech-to-text (`STT_PROVIDER=local`) |
+
+uv sync --extra stt --extra robot --extra perception --extra speaker --extra mic --extra vieneu-gpu --extra embed

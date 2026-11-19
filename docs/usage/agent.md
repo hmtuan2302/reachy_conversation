@@ -95,6 +95,10 @@ uv run reachy-demo agent --file question.wav  # a recorded question
 uv run reachy-demo agent --type               # type instead of speaking
 ```
 
+### Startup greeting
+
+Once everything has loaded (robot, camera, models, and the local Whisper model with `STT_PROVIDER=local`), Reachy says once: "Hi, I'm Reachy Mini, nice to meet you." It is printed as `bot: …` and spoken like an answer: say "stop" to cut it off. Anything else you say while it speaks is ignored. With `--no-speak` it is only printed. It is not kept in the chat history or memory.
+
 ### Typing instead of speaking (`--type`)
 
 Each line you type and send with **Enter** is one turn, just like a finished sentence when speaking. Empty lines are skipped. **Ctrl-D** ends the input (after the last answer), and **Ctrl-C** quits at once.

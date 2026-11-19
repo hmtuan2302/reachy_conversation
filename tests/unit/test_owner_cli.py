@@ -8,6 +8,11 @@ from reachy_demo.agent import cli
 from reachy_demo.audio.vad import EnergyVAD
 
 
+@pytest.fixture(autouse=True)
+def _no_greeting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "GREETING", "")
+
+
 def test_speaker_gate_from_env_missing_voiceprint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

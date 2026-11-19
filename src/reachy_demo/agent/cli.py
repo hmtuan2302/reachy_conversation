@@ -13,10 +13,10 @@ import os
 import sys
 import threading
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from functools import partial
 from pathlib import Path
-from typing import Literal, TextIO
+from typing import Any, Literal, TextIO
 
 import numpy as np
 from dotenv import find_dotenv, load_dotenv
@@ -65,7 +65,7 @@ from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
 from reachy_demo.robot.adapter import connect_robot, face_detector, scored_face_detector
 from reachy_demo.robot.dances import load_dances
 from reachy_demo.robot.motion import Motion
-from reachy_demo.voice.local_stt import transcribe_local
+from reachy_demo.voice.local_stt import SttError, models_from_env, transcribe_local
 from reachy_demo.voice.speak_cli import speaker_from_env, uses_gemini
 from reachy_demo.voice.speaker_id import (
     DEFAULT_HIGH,
@@ -122,6 +122,7 @@ async def converse(
     moving: Callable[[], bool] | None = None,
     on_answer: Callable[[str], None] | None = None,
     on_line: Callable[[str, str], None] | None = None,
+    greeting: str | None = None,
 ) -> None:
     """Answer each completed user turn in order.
 
@@ -133,6 +134,8 @@ async def converse(
     `on_answer(text)` runs as each answer starts (owner mode: whose turn the tools serve).
     `on_line(who, text)` gets each turn ("you") and each whole answer ("bot"), without the
     context or status lines (e.g. for the debug view's chat panel).
+    `greeting` is said first, once listening runs, like an answer (barge-in applies) but
+    without a user turn and without entering the agent's history.
     """
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     line_open = False  # "bot: " printed, answer line not ended yet
@@ -148,17 +151,21 @@ async def converse(
         finally:
             await queue.put(None)  # end of input (or failure): let pending answers finish
 
-    async def answer(text: str) -> None:
+    async def answer(text: str, fixed: str | None = None) -> None:
+        """Answer `text`, or say `fixed` (the greeting) with no user turn and no LLM call."""
         nonlocal line_open
-        if on_answer:
-            on_answer(text)
-        write(f"you: {text}\nbot: ")
-        if on_line:
-            on_line("you", str(text))
+        if fixed is None:
+            if on_answer:
+                on_answer(text)
+            write(f"you: {text}\n")
+            if on_line:
+                on_line("you", str(text))
+        write("bot: ")
         line_open = True
         parts: list[str] = []
+        pieces = _once(fixed) if fixed is not None else agent.answer(text)
         try:
-            async for piece in agent.answer(text):
+            async for piece in pieces:
                 parts.append(piece)
                 write(piece)
         except LLMError as e:  # fail small: report it and keep listening
@@ -184,10 +191,12 @@ async def converse(
             except (TTSError, PlayerError) as e:
                 write(f"  (speech error: {e})\n")
 
-    async def answer_with_barge_in(text: str, classify: Classify) -> tuple[str | None, bool]:
+    async def answer_with_barge_in(
+        job: Coroutine[Any, Any, None], classify: Classify
+    ) -> tuple[str | None, bool]:
         """Run one answer; returns (next turn from a stop's `rest`, input ended)."""
         nonlocal line_open
-        task = asyncio.create_task(answer(text))
+        task = asyncio.create_task(job)
         ignored: list[str] = []
         ended = False
         try:
@@ -222,7 +231,15 @@ async def converse(
 
     listener = asyncio.create_task(listen())
     try:
-        text = await queue.get()
+        text: str | None = None
+        if greeting and classify:
+            text, ended = await answer_with_barge_in(answer("", greeting), classify)
+            if ended:
+                await listener
+                return
+        elif greeting:
+            await answer("", greeting)
+        text = text or await queue.get()
         while text is not None:
             if classify is None:
                 await answer(text)
@@ -236,11 +253,15 @@ async def converse(
                     write(f"you: {text}\n  (stopped)\n")
                     text = _rest_of(text, intent.rest) or await queue.get()
                     continue
-            follow_up, ended = await answer_with_barge_in(text, classify)
+            follow_up, ended = await answer_with_barge_in(answer(text), classify)
             text = follow_up or (None if ended else await queue.get())
         await listener  # re-raise a source/S2T failure after the answers already queued
     finally:
         listener.cancel()
+
+
+async def _once(text: str) -> AsyncIterator[str]:
+    yield text
 
 
 def robot_status(activities: dict[str, Callable[[], bool]]) -> str:
@@ -375,10 +396,16 @@ def run(args: argparse.Namespace) -> int:
         turns = typed_turns(sys.stdin)
     else:
         audio, rec = recorded(args, _tap(source, vad, speech, sound or None, gate))
+        stt_models = None
         if stt == "local":
             local_notice()
+            try:  # loaded now, so the greeting only comes once everything is ready
+                stt_models = models_from_env(os.environ)
+            except SttError as e:
+                print(f"error: {e}", file=sys.stderr)
+                return 2
         turns = (
-            transcribe_local(audio)
+            transcribe_local(audio, models=stt_models)
             if stt == "local"
             else transcribe_stream(audio, hf_token=keys["HF_TOKEN"])
         )
@@ -575,6 +602,7 @@ def run(args: argparse.Namespace) -> int:
                 moving=lambda: head_tools.busy,
                 on_answer=mode.begin,
                 on_line=view.add_line if view else None,
+                greeting=GREETING,
             )
             main = with_sound(main, sound, robot.read_doa, lambda: motion.pose["yaw"])
             code = run_until_done(_with_memory(_then_close(main, head_tools), memory))
@@ -582,13 +610,16 @@ def run(args: argparse.Namespace) -> int:
             agent = make_agent(sets, prompt)
             if agent is None:
                 return 2
-            main = converse(turns, agent, sys.stdout, speak, stop, on_answer=mode.begin)
+            main = converse(
+                turns, agent, sys.stdout, speak, stop, on_answer=mode.begin, greeting=GREETING
+            )
             code = run_until_done(_with_memory(main, memory))
     save_recording(args, rec)
     return code
 
 
 VISION_PROVIDERS = ("hf", "deepseek")
+GREETING = "Hi, I'm Reachy Mini, nice to meet you."
 OBJECT_POLL_S = 0.02  # reading a frame + tracking already takes ~30 ms
 OBJECT_GIVE_UP_S = 10.0  # object unseen this long: stop tracking
 FACE_TRACK_SCORE = 0.6  # YuNet confidence for tracking, the SDK's default (as on the robot)

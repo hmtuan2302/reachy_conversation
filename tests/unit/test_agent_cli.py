@@ -12,12 +12,15 @@ from reachy_demo.agent.intent import Intent
 from reachy_demo.agent.llm import LLMError
 from reachy_demo.voice.tts import TTSError
 
+GREETING = cli.GREETING  # the real text, before the fixture blanks it
+
 
 @pytest.fixture(autouse=True)
 def _memory_off(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never touch the real data/memory.db; the memory tests below opt in with a temp DB."""
     monkeypatch.setenv("MEMORY", "off")
     monkeypatch.setenv("EMBED", "off")  # unit tests never load the real embedding model
+    monkeypatch.setattr(cli, "GREETING", "")  # tested on its own below
 
 
 async def _turns(*texts: str) -> AsyncIterator[str]:
@@ -605,6 +608,7 @@ def test_agent_local_stt_needs_no_hf_token(
         yield "Hi!"
 
     monkeypatch.setattr(cli, "transcribe_local", fake_local)
+    monkeypatch.setattr(cli, "models_from_env", lambda _env: None)
     monkeypatch.setattr(cli, "chat_events", fake_chat)
     monkeypatch.setattr(cli, "source_from_args", lambda _a: _turns())
     monkeypatch.setattr(cli, "speaker_gate_from_env", lambda: None)
@@ -621,3 +625,78 @@ def test_agent_bad_stt_provider_exits_2(
     monkeypatch.setenv("STT_PROVIDER", "moonshine")
     assert cli.run(_args()) == 2
     assert "STT_PROVIDER" in capsys.readouterr().err
+
+
+async def test_greeting_prints_and_speaks_first() -> None:
+    spoken: list[str] = []
+
+    async def speak(text: str) -> None:
+        spoken.append(text)
+
+    out = io.StringIO()
+    agent = _agent()
+    await cli.converse(_turns("A"), agent, out, speak=speak, greeting="Hi.")
+    assert out.getvalue() == "bot: Hi.\nyou: A\nbot: a1\n"
+    assert spoken == ["Hi.", "a1"]
+    assert all("Hi." not in str(m.get("content")) for m in agent.history)
+
+
+async def _slow_speak(text: str) -> None:
+    await asyncio.sleep(0.3)
+
+
+async def test_greeting_can_be_stopped() -> None:
+    out = io.StringIO()
+    cls = _classify({"stop": Intent(True, "")})
+    turns = _timed((0.1, "stop"))
+    await cli.converse(turns, _agent(), out, speak=_slow_speak, classify=cls, greeting="Hi.")
+    assert out.getvalue() == "bot: Hi.\n  (stopped)\n"
+
+
+async def test_greeting_drops_side_talk() -> None:
+    out = io.StringIO()
+    turns = _timed((0.1, "hmm"))
+    await cli.converse(
+        turns, _agent(), out, speak=_slow_speak, classify=_classify({}), greeting="Hi."
+    )
+    assert out.getvalue() == "bot: Hi.\n  (ignored: hmm)\n"
+
+
+async def test_greeting_speech_error_keeps_listening() -> None:
+    async def speak(text: str) -> None:
+        if text == "Hi.":
+            raise TTSError("no voice")
+
+    out = io.StringIO()
+    await cli.converse(_turns("A"), _agent(), out, speak=speak, greeting="Hi.")
+    assert out.getvalue() == "bot: Hi.\n  (speech error: no voice)\nyou: A\nbot: a1\n"
+
+
+def test_agent_local_stt_load_failure_exits_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from reachy_demo.voice.local_stt import SttError
+
+    def boom(_env: Any) -> Any:
+        raise SttError("boom")
+
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.setenv("STT_PROVIDER", "local")
+    monkeypatch.setattr(cli, "models_from_env", boom)
+    monkeypatch.setattr(cli, "source_from_args", lambda _a: _turns())
+    assert cli.run(_args()) == 2
+    assert "boom" in capsys.readouterr().err
+
+
+def test_run_greets_once_ready(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(cli, "GREETING", GREETING)
+    monkeypatch.setattr(cli, "load_dotenv", lambda *_a: False)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-x")
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    args = _args()
+    args.type = True
+    assert cli.run(args) == 0
+    assert capsys.readouterr().out == "bot: Hi, I'm Reachy Mini, nice to meet you.\n"
