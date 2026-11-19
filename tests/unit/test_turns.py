@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import numpy as np
 
 from reachy_demo.voice.turns import FRAME, Resampler24to16, TurnDetector, TurnSettings
@@ -21,9 +23,17 @@ def run(det: TurnDetector, frames: list[tuple[np.ndarray, float]]) -> list[np.nd
     return [a for f, p in frames if (a := det.feed(f, p)) is not None]
 
 
+def recorder(calls: list[int], score: float) -> Callable[[np.ndarray], float]:
+    def is_complete(audio: np.ndarray) -> float:
+        calls.append(len(audio))
+        return score
+
+    return is_complete
+
+
 def test_complete_turn_ends_at_pause() -> None:
     calls: list[int] = []
-    det = TurnDetector(TurnSettings(), lambda a: calls.append(len(a)) or 0.9)
+    det = TurnDetector(TurnSettings(), recorder(calls, 0.9))
     out = run(det, speech(1000) + silence(224))
     assert len(out) == 1 and len(calls) == 1
 
@@ -43,7 +53,7 @@ def test_max_silence_ends_turn_when_smart_turn_says_no() -> None:
 
 def test_smart_turn_asked_once_per_pause() -> None:
     calls: list[int] = []
-    det = TurnDetector(TurnSettings(), lambda a: calls.append(1) or 0.0)
+    det = TurnDetector(TurnSettings(), recorder(calls, 0.0))
     run(det, speech(1000) + silence(1500))
     assert len(calls) == 1
 
@@ -56,7 +66,7 @@ def test_lead_in_kept() -> None:
 
 def test_short_blip_is_not_a_turn() -> None:
     calls: list[int] = []
-    det = TurnDetector(TurnSettings(), lambda a: calls.append(1) or 1.0)
+    det = TurnDetector(TurnSettings(), recorder(calls, 1.0))
     assert run(det, speech(160) + silence(2500)) == [] and calls == []
 
 
@@ -68,7 +78,7 @@ def test_flush_returns_open_turn() -> None:
 
 def test_smart_turn_gets_at_most_8s() -> None:
     seen: list[int] = []
-    det = TurnDetector(TurnSettings(), lambda a: seen.append(len(a)) or 1.0)
+    det = TurnDetector(TurnSettings(), recorder(seen, 1.0))
     run(det, speech(12000) + silence(224))
     assert seen == [8 * 16000]
 
