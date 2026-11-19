@@ -21,6 +21,7 @@ speaker = ["sherpa-onnx>=1.10"]          # speaker-embedding gate
 mic = ["sounddevice>=0.5"]
 vieneu = ["vieneu>=3.7"]                 # local VieNeu-TTS v3 Turbo (TTS_PROVIDER=vieneu)
 vieneu-gpu = ["vieneu[cuda]>=3.8", "torch", "torchaudio"]      # VieNeu on an NVIDIA GPU (TTS_DEVICE=gpu): PyTorch + CUDA 12.6
+stt = ["faster-whisper>=1.2,<2", "huggingface-hub>=0.25"]   # local STT (STT_PROVIDER=local)
 embed = [
     "huggingface-hub>=0.25",
     "tokenizers>=0.20",
@@ -66,7 +67,7 @@ strict = true
 files = ["src/reachy_demo", "tests"]
 # SDK / model libs ship without stubs
 [[tool.mypy.overrides]]
-module = ["reachy_mini.*", "reachy_mini_dances_library.*", "mediapipe.*", "cv2.*", "sherpa_onnx.*", "onnxruntime.*", "sounddevice.*", "vieneu.*"]
+module = ["reachy_mini.*", "reachy_mini_dances_library.*", "mediapipe.*", "cv2.*", "sherpa_onnx.*", "onnxruntime.*", "sounddevice.*", "vieneu.*", "faster_whisper", "faster_whisper.*", "ctranslate2"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
