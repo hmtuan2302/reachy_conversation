@@ -10,6 +10,7 @@ import contextlib
 import json
 import logging
 import math
+import os
 import threading
 import time
 import urllib.request
@@ -232,6 +233,12 @@ def _open(host: str, camera: bool) -> Any:
     return ReachyMini(host=host, connection_mode="network", media_backend="no_media")
 
 
+NO_NVDEC = ",".join(
+    f"nv{c}dec:NONE"
+    for c in ("h264", "h265", "vp8", "vp9", "av1", "jpeg", "mpeg2video", "mpeg4video")
+)
+
+
 @contextmanager
 def connect_robot(host: str, camera: bool = True) -> Iterator[Robot]:
     """Connect over Wi-Fi by IP; yields the pose sender and the camera.
@@ -241,6 +248,10 @@ def connect_robot(host: str, camera: bool = True) -> Iterator[Robot]:
     the head is lowered into the SDK's rest (sleep) pose, and only then are the motors disabled:
     the head already rests on its stops, so it doesn't drop.
     """
+    # NVDEC decoding makes CUDA calls from GStreamer's thread, which break PyTorch's CUDA graph
+    # capture (VieNeu on GPU: "Offset increment outside graph capture"). Decode video on the CPU.
+    # Read once, by the SDK's first Gst.init during connect.
+    os.environ.setdefault("GST_PLUGIN_FEATURE_RANK", NO_NVDEC)
     from reachy_mini.reachy_mini import SLEEP_ANTENNAS_JOINT_POSITIONS, SLEEP_HEAD_POSE
     from reachy_mini.utils import create_head_pose
 

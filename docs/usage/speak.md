@@ -68,6 +68,7 @@ To list the voices: `uv run python -c "from vieneu import Vieneu; print(Vieneu()
 | `speech error: TTS_DEVICE=gpu needs PyTorch` (exit 1) | `uv sync --inexact --extra vieneu-gpu` |
 | `speech error: TTS_DEVICE=gpu but PyTorch sees no CUDA GPU` (exit 1) | Check `nvidia-smi`. Update the NVIDIA driver, or set `TTS_DEVICE=cpu` |
 | `speech error: TTS_DEVICE must be cpu or gpu` (exit 1) | Fix the typo in `.env` |
+| `speech error: VieNeu TTS failed: Offset increment outside graph capture encountered unexpectedly.` | Another library used the GPU while VieNeu recorded a CUDA graph. With `--robot`, GStreamer's NVIDIA video decoder did this, so `connect_robot` turns NVIDIA decoders off (`GST_PLUGIN_FEATURE_RANK`, see [adapter.py](../../src/reachy_demo/robot/adapter.py)). Once it happens, every later answer fails: restart the agent |
 | `speech error: VieNeu TTS failed: ...` (exit 1) | The model failed to load or run. Check the voice name and the network on the first download |
 | `speech error: cannot start player 'ffplay.exe' ...` (exit 1) | Install Windows ffmpeg, or set `TTS_PLAYER=none`. The WAV is still saved |
 
