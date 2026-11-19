@@ -19,7 +19,7 @@ A single Python app, running on the owner's laptop, that drives a **Reachy Mini 
 **Goals**
 - All 10 features live in one process at the same time, in one continuous show **[decided]**.
 - Built feature by feature in the owner's order 1→10 **[decided]**, with each step demo-able before the next.
-- Runs on a **CPU-only laptop**. Third-party APIs are allowed, and so are light local CPU models **[decided]**.
+- Runs on a **CPU-only laptop**. Third-party APIs are allowed, and so are light local CPU models **[decided]**. **[changed 2026-11-19]** The laptop has an NVIDIA GPU (~4 GB VRAM free beside local STT and VieNeu TTS), so local GPU models are allowed too (VieNeu TTS, YOLOE in memory Phase 2).
 - A lean codebase written **from scratch** that the owner fully understands **[decided]**. It borrows ideas, not code wholesale, from `opensource/apps/reachy_mini_conversation_app`.
 
 **Non-goals**
@@ -39,7 +39,7 @@ A single Python app, running on the owner's laptop, that drives a **Reachy Mini 
 | Constraint | Consequence |
 |---|---|
 | Reachy Mini **Wireless**, app on laptop over Wi‑Fi **[decided]** | Camera, mic and speaker are streamed via the SDK's WebRTC media client. Adds ~100–300 ms latency, and Wi‑Fi quality matters at the venue. |
-| Laptop has **no GPU** **[decided]** | Only small ONNX/TFLite models run locally. Heavy vision reasoning goes to a cloud API. |
+| Laptop has **no GPU** **[decided]**, **[changed 2026-11-19]**: it has an NVIDIA GPU, ~4 GB VRAM free beside STT and TTS | Small ONNX models still run on CPU. Local GPU models (VieNeu TTS, YOLOE) share the GPU; heavy vision reasoning still goes to a cloud API. |
 | SDK `reachy_mini` 1.13 (installed in `~/reachy_mini/reachy_mini_env`) | Provides `get_frame()`, `get_audio_sample()`, `push_audio_sample()`, `set_target()`, `goto_target()`, `look_at_image()`, `look_at_world()`, `get_DoA()`. Daemon REST: `GET /api/state/doa`. |
 | DoA reports angle **0 = left, π/2 = front, π = right** | The mic array covers the front half-plane only. "Turns around" means turning left or right toward the side the sound came from. It cannot tell front from back (see Risk R4). |
 | Live venue | Noisy room, multiple voices, variable lighting. |

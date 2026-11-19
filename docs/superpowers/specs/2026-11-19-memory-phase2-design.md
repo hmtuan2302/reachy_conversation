@@ -40,6 +40,7 @@ Reachy remembers where things are in the room. You say "learn the room" and it l
 | One memory rule, no age tiers: any valid sighting → look there first | Age tiers (10 min / 1 day / older) all ended up looking at the old spot first anyway, since the nearest sweep stop always has it in view. One branch instead of three; age only changes the wording. |
 | Spots that failed searches checked are searched last, not skipped | The object may have been put there since. Same speed in the normal case, never a miss. |
 | YOLOE via `ultralytics` (AGPL-3.0) | Chosen by the owner; license accepted. Recorded in NOTICE. |
+| YOLOE runs on the GPU, shared with VieNeu TTS and STT | The laptop has an NVIDIA GPU with ~4 GB VRAM free after STT and VieNeu load; YOLOE needs ~1–2 GB. GPU passes (~10–30 ms) make tiles cheap in find too. |
 | Memory recall of places and tasks is owner-only | Same as `find_object`. Guests can't ask where the owner's things are. |
 
 ## 1. Components
@@ -110,12 +111,14 @@ class OpenVocabDetector:            # implements the existing Detects protocol
     def detect_many(self, bgr: Frame, nouns: list[str]) -> list[Detection]: ...
 ```
 
-- YOLOE (`ultralytics`, CPU torch, one thread like YOLOX). The model comes from `OPEN_VOCAB_MODEL`, default `yoloe-11s-seg.pt` [verify name and the smallest model that works].
+- YOLOE (`ultralytics`, torch, fp16 on CUDA). The model comes from `OPEN_VOCAB_MODEL`, default `yoloe-11s-seg.pt` [verify name; try M if S misses small objects, VRAM allows it]. The device comes from `OPEN_VOCAB_DEVICE` (`gpu` | `cpu`; empty = GPU if found, else CPU), like `TTS_DEVICE`.
 - `set_classes(nouns, text_pe)` is called only when the noun list changes, with the last list cached. The text encoder cost is paid once per search, not per tile.
-- `detect_tiled` is typed on the `Detects` protocol instead of `ObjectDetector`, so both detectors use it.
-- Leased like YOLOX: built by a factory on the first search or scan, and released when it ends (rule 6).
-- New extra `openvocab = ["ultralytics==<pin after spike>"]` plus a CPU torch index note in 06-operations.
-- **Fail small**: if the extra isn't installed or the model doesn't load, `find_object` falls back to YOLOX for nouns that map to COCO (small alias table: phone→cell phone, sofa→couch, table→dining table, tv, laptop, cup, bottle, book, remote…). Other nouns return `unsupported_object` as today, and `learn_room` returns `scan_unavailable`.
+- `detect_tiled` is typed on the `Detects` protocol instead of `ObjectDetector`, so both detectors use it. On the GPU the 10 tiles go in one batch.
+- Leased like YOLOX: built by a factory on the first search or scan, and released when it ends (rule 6): drop the model, then `torch.cuda.empty_cache()`, so the VRAM goes back to TTS and STT.
+- New extra `openvocab = ["ultralytics==<pin after spike>"]`, using the same CUDA torch as `vieneu-gpu`. The install goes in 06-operations.
+- **Fail small**, in order: GPU missing or CUDA out of memory → load on CPU (slower: whole frame only, no tiles in find). Extra not installed or the model won't load → `find_object` falls back to YOLOX for nouns that map to COCO (small alias table: phone→cell phone, sofa→couch, table→dining table, tv, laptop, cup, bottle, book, remote…). Other nouns return `unsupported_object` as today, and `learn_room` returns `scan_unavailable`.
+
+**Sharing the GPU.** STT (faster-whisper, CTranslate2), VieNeu TTS (torch) and YOLOE (torch) run in one process on one GPU. Each keeps its own VRAM. The GPU interleaves their work, so nothing blocks, but two at once each run slower. They overlap when Reachy talks as a sweep starts, when you speak during a sweep, and during a scan. A slower YOLOE pass doesn't matter (the head waits for still frames anyway); TTS falling behind real time makes the voice stutter. Rule: measure in the spike first (§11). Only if TTS stutters, `Search` and `RoomScan` wait at each stop while Reachy is speaking, which is one `await`, so speech always wins. No separate processes or GPU scheduling.
 
 YOLOE scores are not comparable to YOLOX's, so `SURE` doesn't apply to YOLOE hits: every hit goes to `choose()` unless there is no vision model. The thresholds are `OPEN_MIN_SCORE` for find and `SCAN_MIN_SCORE` (lower) for scan confirmation, both set from the spike [verify: start 0.25 / 0.15].
 
@@ -287,6 +290,7 @@ The find tool and the scan prompt both follow the "plainest common English noun"
 | Env | Default | Meaning |
 |---|---|---|
 | `OPEN_VOCAB_MODEL` | `yoloe-11s-seg.pt` [verify] | YOLOE weights; empty → YOLOX fallback |
+| `OPEN_VOCAB_DEVICE` | empty = GPU if found | `gpu` \| `cpu` |
 | `OPEN_MIN_SCORE` | from spike | find threshold |
 | `SCAN_MIN_SCORE` | from spike | scan confirmation threshold |
 
@@ -296,7 +300,9 @@ The find tool and the scan prompt both follow the "plainest common English noun"
 
 | Failure | Behaviour |
 |---|---|
+| No GPU / CUDA out of memory | YOLOE on CPU, whole frame only in find (logged once) |
 | YOLOE not installed / fails to load | YOLOX fallback for COCO nouns, `learn_room` → `scan_unavailable` |
+| TTS stutters while YOLOE runs | Sweep and scan wait at each stop while Reachy speaks (only if the spike shows it) |
 | Vision model down during scan | That stop is empty. With no stops at all → `scan_failed`, nothing written. |
 | Merge LLM fails | Code merge (§4.3.4) |
 | Memory write raises | Log, carry on. The search result is unchanged. |
@@ -322,10 +328,11 @@ Unit tests, no robot, with fakes for motion, grab, ask, detector and clock:
 `scripts/spike_scan.py` on 3–5 saved frames from adjacent stops (plus live timing on the robot laptop):
 
 1. **Vision model** (both `VISION_PROVIDER`s): valid JSON rate, whether `region` is right, and the same noun for the same desk across overlapping frames with `known_so_far`.
-2. **YOLOE on CPU**: model load time, `set_classes` time, one 640 pass, full frame + 9 tiles. Recall on phone, cup, keys and remote at the room's distance. Which landmarks it misses.
-3. **Merge LLM**: correct groups for about 9 stops × 10 entities.
+2. **YOLOE on the GPU**: model load time, `set_classes` time, one 640 pass, full frame + 9 tiles batched. Peak VRAM with STT and VieNeu loaded, and VRAM back after release. Recall on phone, cup, keys and remote at the room's distance (S vs M). Which landmarks it misses.
+3. **GPU sharing**: VieNeu speed (audio seconds per wall second) alone and while a YOLOE sweep runs. Below 1.0, or audible stutter, turns on the wait-while-speaking rule (§3).
+4. **Merge LLM**: correct groups for about 9 stops × 10 entities.
 
-The results decide: tiles in find or scan only, `OPEN_MIN_SCORE`/`SCAN_MIN_SCORE`, the YOLOE model size, the `ultralytics` pin, and whether the 40 s find promise still holds. If a YOLOE sweep is over about 40 s with tiles, find uses the whole frame only and relies on memory first.
+The results decide: `OPEN_MIN_SCORE`/`SCAN_MIN_SCORE`, the YOLOE model size, the `ultralytics` pin, and whether sweeps must wait while Reachy speaks. The CPU fallback is timed once to set its no-tiles rule.
 
 ## 12. Build order
 
@@ -357,4 +364,4 @@ Steps 2–4 already help with no scan and no YOLOE.
 - `docs/FEATURES.md`: the memory and find rows, branch table, "Last updated".
 - `docs/architecture/05-agent-tools-memory.md` §5: point to this spec.
 - `NOTICE`: YOLOE / ultralytics (AGPL-3.0).
-- `docs/architecture/06-operations.md`: `openvocab` extra and CPU torch install.
+- `docs/architecture/06-operations.md`: `openvocab` extra, CUDA torch install, `OPEN_VOCAB_DEVICE`.

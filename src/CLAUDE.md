@@ -1,6 +1,6 @@
 # CLAUDE.md — Reachy Mini Agentic Demo
 
-Single-process Python 3.12 app that drives a **Reachy Mini Wireless** over Wi‑Fi from a CPU-only WSL2 laptop. It is a **live demo**, so reliability on stage beats polish. Ten features, built in this order: greeting → realtime voice → emotion-aware → tracking/attention → find object → mimic → sound DoA → memory → owner-only voice → point-and-recognize.
+Single-process Python 3.12 app that drives a **Reachy Mini Wireless** over Wi‑Fi from a WSL2 laptop with a small NVIDIA GPU (~4 GB VRAM free beside local STT and VieNeu TTS). It is a **live demo**, so reliability on stage beats polish. Ten features, built in this order: greeting → realtime voice → emotion-aware → tracking/attention → find object → mimic → sound DoA → memory → owner-only voice → point-and-recognize.
 
 ## Read first (source of truth)
 
@@ -34,7 +34,7 @@ Done = ruff, mypy and pytest all green. `unset VIRTUAL_ENV` if uv warns about a 
 3. **Permissions are enforced in code**: tools marked `owner_only` refuse guests. The prompt is a courtesy, not the control. Guests can chat.
 4. **Fail small**: workers run under a supervisor, and a dead model degrades one feature, not the conversation. Stale perception data (>500 ms) counts as absent.
 5. **Latest-value world**: perception writes `WorldState`, readers take snapshots. Events only for things that happen.
-6. Models run only while leased by a behaviour/tool (CPU budget).
+6. Models run only while leased by a behaviour/tool (CPU and VRAM budget).
 7. Server turn detection is off. The app decides turn end, tags the speaker, then commits.
 
 ## Engineering standards

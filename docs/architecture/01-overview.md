@@ -12,7 +12,7 @@
 ## 2. System context
 
 ```
-                 ┌──────────────────────────── Demo laptop (WSL2, CPU-only) ───────────────────────────┐
+                 ┌──────────────────────────── Demo laptop (WSL2, CUDA GPU) ───────────────────────────┐
   Owner / guests │                                                                                      │
   (voice, face,  │   reachy_demo  (single Python 3.12 process)                                         │
    hands)        │                                                                                      │
