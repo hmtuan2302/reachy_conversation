@@ -355,6 +355,8 @@ Algorithm:
 
 ## 8. Phase 2 — Objects and places
 
+> **Superseded 2026-11-19** by [2026-11-19-memory-phase2-design.md](2026-11-19-memory-phase2-design.md): room scan (vision model proposes, YOLOE confirms, LLM merges), landmarks + sightings in SQLite, memory-first open-vocabulary `find_object`, task episodes for searches; no live watching. The P2 tables in §6 are replaced by its `V5_SPATIAL`. The text below is kept for history.
+
 ### 8.1 Depends on
 - `find_object` (F5, M5) and a detector/`WorldState` from perception (research §6.6). Until they exist, 2.1–2.4 work with the existing `camera` tool only.
 - Camera horizontal FOV for bearing math **[verify on the robot; store in config]**.
