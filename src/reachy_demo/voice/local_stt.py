@@ -119,30 +119,52 @@ def _preload_cuda_libs() -> None:
     ):
         spec = importlib.util.find_spec(pkg)
         if spec is None or not spec.submodule_search_locations:
-            continue  # system CUDA install, or missing: WhisperModel reports it
+            continue  # system CUDA install, or missing: _cuda_libs_ok reports it
         lib = Path(next(iter(spec.submodule_search_locations))) / "lib"
         for name in names:
             if (lib / name).is_file():
                 ctypes.CDLL(str(lib / name), mode=ctypes.RTLD_GLOBAL)
 
 
+def _cuda_libs_ok() -> bool:
+    """True if cuBLAS 12 and cuDNN 9 load. Checked first because a missing cuDNN makes
+    ctranslate2 abort() the whole process instead of raising."""
+    import ctypes
+
+    _preload_cuda_libs()
+    try:
+        for name in ("libcublas.so.12", "libcudnn_ops.so.9"):
+            ctypes.CDLL(name)
+    except OSError:
+        return False
+    return True
+
+
 def _load_whisper(model: str, device: str) -> Callable[[np.ndarray], str]:
     import ctranslate2
     import faster_whisper
 
-    if device == "gpu" or (device == "" and ctranslate2.get_cuda_device_count() > 0):
+    if device == "gpu" and not _cuda_libs_ok():
+        raise SttError(
+            "cuDNN 9 / cuBLAS 12 not found for Whisper on GPU (install the vieneu-gpu extra). "
+            "Try STT_DEVICE=cpu"
+        )
+    if device == "gpu" or (
+        device == "" and ctranslate2.get_cuda_device_count() > 0 and _cuda_libs_ok()
+    ):
         dev, compute = "cuda", "int8_float16"
     else:
         dev, compute = "cpu", "int8"
-    if dev == "cuda":
-        _preload_cuda_libs()
+        if device == "" and ctranslate2.get_cuda_device_count() > 0:
+            log.warning("GPU found but cuDNN/cuBLAS missing: Whisper runs on CPU")
     try:
         whisper = faster_whisper.WhisperModel(model, device=dev, compute_type=compute)
         # Segments are lazy: consume them so a missing CUDA library fails here, not mid-turn.
         segments, _ = whisper.transcribe(np.zeros(RATE16, np.float32), language="en", beam_size=1)
         list(segments)
     except (RuntimeError, OSError, ValueError) as e:
-        raise SttError(f"Whisper failed to load on {dev}: {e}. Try STT_DEVICE=cpu") from e
+        hint = ". Try STT_DEVICE=cpu" if dev == "cuda" else " (first run needs network)"
+        raise SttError(f"Whisper {model} failed to load on {dev}: {e}{hint}") from e
     log.info("whisper %s loaded on %s (%s)", model, dev, compute)
 
     def transcribe(audio: np.ndarray) -> str:
@@ -163,10 +185,17 @@ def _load_whisper(model: str, device: str) -> Callable[[np.ndarray], str]:
 
 
 def load_models(model: str = DEFAULT_MODEL, device: str = "") -> LocalModels:
-    """Load and warm up all three models. `device`: "cpu", "gpu" or "" (GPU if found)."""
-    return LocalModels(
-        vad=_load_vad(), turn=_load_smart_turn(), transcribe=_load_whisper(model, device)
-    )
+    """Load and warm up all three models. `device`: "cpu", "gpu" or "" (GPU if found).
+
+    Every load failure becomes an SttError with a one-line message.
+    """
+    try:
+        vad, turn = _load_vad(), _load_smart_turn()
+        return LocalModels(vad=vad, turn=turn, transcribe=_load_whisper(model, device))
+    except ImportError as e:
+        raise SttError(f"STT_PROVIDER=local needs the package: uv sync --extra stt ({e})") from e
+    except OSError as e:  # Smart Turn download (Whisper wraps its own errors)
+        raise SttError(f"could not get {SMART_TURN_FILE}, first run needs network: {e}") from e
 
 
 def models_from_env(env: Mapping[str, str]) -> LocalModels:
@@ -182,27 +211,49 @@ async def transcribe_local(
     models: LocalModels | None = None,
     settings: TurnSettings | None = None,
 ) -> AsyncIterator[str]:
-    """Yield one transcript per finished turn. Raises SttError if the models fail to load."""
+    """Yield one transcript per finished turn. Raises SttError if the models fail to load.
+
+    A pump task keeps pulling the source while models run, so upstream taps (ducking, speaker
+    gate) stay live, and all model calls run in worker threads, off the event loop.
+    """
     if models is None:
         models = await asyncio.to_thread(models_from_env, os.environ)
-    detector = TurnDetector(settings or TurnSettings.from_env(os.environ), models.turn)
+    m = models
+    detector = TurnDetector(settings or TurnSettings.from_env(os.environ), m.turn)
     resampler = Resampler24to16()
     pending = np.zeros(0, np.float32)
+    queue: asyncio.Queue[bytes | Exception | None] = asyncio.Queue()
+
+    async def pump() -> None:
+        try:
+            async for chunk in pcm24k:
+                queue.put_nowait(chunk)
+        except Exception as e:  # re-raised by the reader, like transcribe_stream does
+            queue.put_nowait(e)
+        queue.put_nowait(None)
+
+    def step(chunk: bytes) -> list[np.ndarray]:
+        nonlocal pending
+        pending = np.concatenate([pending, resampler.feed(chunk)])
+        n = len(pending) - len(pending) % FRAME
+        frames, pending = pending[:n].reshape(-1, FRAME), pending[n:]
+        return [a for f in frames if (a := detector.feed(f, m.vad(f))) is not None]
 
     async def finish(audio: np.ndarray) -> str:
         log.info(
             "turn ended", extra={"seconds": len(audio) / RATE16, "smart_turn": detector.last_score}
         )
-        return (await asyncio.to_thread(models.transcribe, audio)).strip()
+        return (await asyncio.to_thread(m.transcribe, audio)).strip()
 
-    async for chunk in pcm24k:
-        pending = np.concatenate([pending, resampler.feed(chunk)])
-        n = len(pending) - len(pending) % FRAME
-        for frame in pending[:n].reshape(-1, FRAME):
-            if (audio := detector.feed(frame, models.vad(frame))) is not None and (
-                text := await finish(audio)
-            ):
-                yield text
-        pending = pending[n:]
-    if (audio := detector.flush()) is not None and (text := await finish(audio)):
-        yield text
+    task = asyncio.create_task(pump())
+    try:
+        while (item := await queue.get()) is not None:
+            if isinstance(item, Exception):
+                raise item
+            for audio in await asyncio.to_thread(step, item):
+                if text := await finish(audio):
+                    yield text
+        if (last := detector.flush()) is not None and (text := await finish(last)):
+            yield text
+    finally:
+        task.cancel()
