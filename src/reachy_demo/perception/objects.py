@@ -545,3 +545,55 @@ class ObjectSource:
         full = (box[0] * 2, box[1] * 2, box[2] * 2, box[3] * 2)  # half-size frame -> full
         self._mark = Mark(full, self._score, self._label, source, aim, self._clock())
         return aim[0], aim[1], shown_at
+
+
+HEAD_FRAC = 0.1  # the head's centre sits this far down a standing person's box
+TOP_MARGIN = 0.02  # a box this close to the top edge is cut off: the head is above the frame
+ABOVE = -1.3  # aim above the frame (y < -1): Follow tilts up
+
+
+class PersonHeads:
+    """Where each person's head should be, from YOLOX `person` boxes (attention/hints.with_body).
+
+    For a back turned, a face too small or covered, or a person so close that only the body is in
+    view. `read` loads the detector on first use; `release` frees it (models run only while
+    leased)."""
+
+    def __init__(
+        self,
+        grab: GrabFrame,
+        make_detector: Callable[[], Detects],
+        clock: Callable[[], float] = time.monotonic,
+        lag_s: float = CAMERA_LAG_S,
+    ) -> None:
+        self._grab = grab
+        self._make_detector = make_detector
+        self._clock = clock
+        self._lag_s = lag_s
+        self._detector: Detects | None = None
+
+    def read(self) -> list[tuple[float, float, float]]:
+        """(x, y in [-1, 1], frame time) per person; y < -1 when the head is above the frame."""
+        if self._detector is None:
+            try:
+                self._detector = self._make_detector()
+            except Exception as e:  # noqa: BLE001 - fail small: no body hint
+                log.warning("person detector unavailable: %s", e)
+                return []
+        shown_at = self._clock() - self._lag_s
+        frame = self._grab()
+        if frame is None:
+            return []
+        half = np.ascontiguousarray(frame[::2, ::2])
+        h, w = half.shape[:2]
+        heads = []
+        for d in self._detector.detect(half, "person"):
+            x, y, bw, bh = d.box
+            cx = (x + bw / 2) / max(w - 1, 1) * 2 - 1
+            top = y / max(h - 1, 1) * 2 - 1
+            hy = ABOVE if top < -1 + 2 * TOP_MARGIN else top + 2 * HEAD_FRAC * bh / max(h - 1, 1)
+            heads.append((cx, hy, shown_at))
+        return heads
+
+    def release(self) -> None:
+        self._detector = None

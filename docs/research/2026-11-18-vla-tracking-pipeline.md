@@ -13,7 +13,7 @@ Conventions: **[verify]** = an assumption to confirm in the Step 0 spikes (§5).
 1. **Task:** the user names an object by voice; the head keeps it centred while it moves. The policy sees the camera frame, the current head pose and the instruction, and outputs where to look next.
 2. **Model:** SmolVLA (~450M parameters) fine-tuned with LeRobot from `lerobot/smolvla_base`. Train on a rented GPU or Colab; serve from a GPU machine on the same LAN. The demo laptop is CPU-only.
 3. **Data:** mostly real recordings, labelled automatically offline (open-vocabulary detector + SAM 2 → geometry → actions). Extra data from warping real frames; simulation only for rare cases.
-4. **Testing:** replay on held-out real episodes is the accuracy gate. MuJoCo simulation tests integration and safety, not accuracy.
+4. **Testing:** replay on held-out real episodes is the accuracy gate. MuJoCo simulation and unit tests verify safety; real images verify accuracy (§11).
 5. **Deployment:** the policy is one more **behaviour** in the arbiter. Its output passes through the motion loop's limits, smoothing and watchdog. If the policy server is slow or down, a detector + PID baseline takes over.
 6. **Rule:** the VLA ships only if it beats the baseline on the metrics in §4.
 
@@ -231,7 +231,7 @@ Threads:
 - **Pose thread:** reads the head pose and body yaw at ≥ 50 Hz and logs them with timestamps. Also logs the target the motion loop sent. Body yaw is logged even though v1 doesn't train on it, so a v2 that needs it doesn't require re-recording.
 - **Main thread:** runs the session script, keyboard/voice controls, and writes episodes.
 
-Controls: `space` start/stop episode, `n` next, `d` discard the last one, `q` quit. The voice agent can read out the next scenario ("Next: white mug, fast pass, lamp only").
+Controls (built 2026-11-20, typed lines so it works in any terminal): Enter records / stops early, `r` other scenario, `d` delete the last episode, `n TEXT` note, `q` quit. Episodes stop by themselves after `--seconds`, so your hands stay on the object. Teleop is not built yet. `--target face` records the same layout for face tracking (people list, YuNet tracker, face-specific factors). Guidelines: [track-record-face.md](../usage/track-record-face.md), [track-record.md](../usage/track-record.md).
 
 Raw layout, written as-is (no processing during recording):
 
@@ -332,6 +332,8 @@ Calibrate at the exact resolution and stream (WebRTC) that recording and inferen
 ## 7. Labelling
 
 ### 7.1 Automatic pipeline (`scripts/track_label.py`, GPU)
+
+**Faces (built 2026-11-20):** actions now also cover frames where the face is not visible: hindsight targets (where the face is next seen within 3 s), so the policy learns "body in view: tilt up" and "left fast to the right: turn right"; `d_yaw`/`d_pitch` can be non-zero while `visible = 0`. State gains `last_d_yaw`, `last_d_pitch`, `since_seen_s` (memory of the last sighting). The recorder's tracker uses body and chase rules (`attention/hints.py`) so the camera does find the face again. SCRFD on every frame + ArcFace identity from an automatic per-person gallery, instead of OWLv2 + SAM 2. No new packages (onnxruntime), CPU. Bad episodes are deleted, not fixed. See [track-label.md](../usage/track-label.md). The steps below remain the plan for objects.
 
 Per episode:
 1. **Find:** run OWLv2 or Grounding DINO with the object name on the first frames where it's expected. Take the most confident box. If confidence is low, add the episode to the "click needed" list (one click on the object in the first frame).
@@ -478,31 +480,78 @@ Run the checkpoint on val/test episodes frame by frame and compare to the labels
 
 ## 11. Simulation testing
 
-The simulator's images don't look like your desk, so **sim results are not accuracy claims**. Sim is for testing that the system behaves correctly and safely before the real robot is involved.
+Split of responsibilities (decided 2026-11-20):
+- **Sim and unit tests verify safety logic**: no command outside the limits, no NaN, no jumps, correct fallback and stop.
+- **Real tests verify accuracy** (§10.5 replay, §11.4 real-image crop, §12.4 live), plus the physical risks sim can't model (§11.3).
 
-### 11.1 Setup
+Simulator images don't look like your desk, so **sim results are not accuracy claims**.
 
-- Reachy Mini MuJoCo model from the SDK's simulator, with the head camera rendered **[verify, §5]**.
-- Scene: a table, a few objects (primitives, or scanned real objects), scripted object trajectories (still, slide, fast pass, leave and return).
-- The same app code runs against the simulator by pointing the adapter at it, so `TrackBehaviour`, the client, the motion loop and the server are all the real ones.
+### 11.0 Status and known gaps (2026-11-20)
 
-### 11.2 Test list
+- `scripts/face_sim_example.py` ([usage](../usage/face-sim.md)) is a **tracking demo, not a safety test**. It shows that MuJoCo renders a face board, the head-camera loop works, and the true error comes free from the sim. But it uses a 2-hinge stand-in instead of the Reachy Mini model, clamps angles with its own `np.clip` instead of `robot/motion.py`, and runs none of the tests below.
+- **Bug: `clamp()` lets NaN through.** `clamp({"yaw": nan, "body_yaw": nan})` returns NaN for both (`inf` is capped). Python's `min`/`max` don't reject NaN, so a NaN action would reach `set_target`.
+- **No rate cap in the motion layer.** `goto(..., duration_s=0.001)` jumps in one tick. Callers like `attention/search.py` slow their own moves; a policy output would not be slowed.
+- **§12.2 doesn't match the code.** §12.2 says yaw ±60°, pitch −30°/+25°, body ±160°, rate caps 120°/s and 60°/s. `motion.LIMITS` has yaw ±45° (relative to body), pitch ±30°, roll ±25°, body ±120°, and no rate cap. Pick one source of truth before writing tests.
 
-| Test | Pass condition |
-|---|---|
-| End-to-end run | `track("red box")` → head moves toward the box within 1 s |
-| Limits | Object moved far out of range → head stops at the soft limits (yaw ±60°, pitch −30°/+25°), never beyond |
-| Body split | Object circles 180° around the robot → gaze stays on it, body takes over past 35° head yaw, stops at ±160°, no head/body fighting (≤ 2 direction changes/s) |
-| Server killed mid-track | Fallback within 500 ms, `policy_stale` logged, no jump in head pose |
-| Server slow (inject 400 ms delay) | Stale replies dropped; no oscillation |
-| Object removed | `present` goes to 0, head holds, agent gets "lost it" |
-| Garbage output (inject NaN / ±90°) | Clamped or rejected; head stays within limits |
-| Stop command | Behaviour ends within one tick; arbiter resumes the previous behaviour |
-| 30-minute soak | No crash, no memory growth, latency p95 stable |
+### 11.1 Layer 1: unit tests on the motion layer (no MuJoCo)
 
-### 11.3 Real-image replay simulator (optional)
+Every command goes through `Motion` → `set_pose`, so a fake `set_pose` that records each sent pose, plus a fake clock, checks the rules in milliseconds in CI. File: `tests/unit/test_motion_safety.py`. Each test feeds bad or random input and asserts the rule on **every** recorded pose.
 
-For closed-loop tests with real pixels: record wide, still-camera videos of moving objects; the "virtual head" is a crop that the policy moves around (using the warp from §8.1). This tests recovery and smoothness on real images without the robot. Limited to the wide camera's field of view.
+| # | Test | Input | Must hold for every sent pose |
+|---|---|---|---|
+| 1 | Position limits | Random poses, extremes, ±1e9 | Every axis within `LIMITS` |
+| 2 | Bad numbers | NaN, inf, missing keys | All values finite; head holds last good pose (**fails today**) |
+| 3 | Head vs body | Body at ±limit, head pushed the other way | \|yaw − body_yaw\| ≤ head yaw limit |
+| 4 | Rate cap | `goto` with 0.001 s; policy jumping ±90° per tick | Change per tick ≤ cap × tick (**fails today**: no cap) |
+| 5 | No shaking | Policy flipping left/right every tick | ≤ N direction changes per second |
+| 6 | Stop | `stop()` mid-move | No new target after one tick; eased return to neutral, no jump |
+| 7 | Watchdog | Policy silent, or replies 400 ms late | Head holds within 500 ms; stale replies dropped; no jump on resume |
+| 8 | Crash in a move | `pose_at` raises | No more commands; error reported |
+| 9 | Soak | 30 simulated minutes of random input | All rules hold; queue and memory bounded |
+
+Tests 6–7 depend on how `TrackBehaviour` feeds `Motion`; adjust once it exists.
+
+### 11.2 Layer 2: MuJoCo with the SDK's Reachy Mini model
+
+Blocked on the §5 "Sim" spike (does the SDK sim run and render the head camera?). Setup:
+- The SDK's Reachy Mini MJCF, not a stand-in.
+- The app's adapter pointed at the sim, so the real arbiter → `TrackBehaviour` → `Motion` → adapter path drives it.
+- Scene: the face board from `face_sim_example.py` (photo on a moving plane), scripted motions, an optional second face as a distractor.
+- Fault injection: NaN or ±90° outputs, 400 ms delay, server killed mid-track.
+- File: `tests/sim/test_sim_safety.py` (pytest, skipped when MuJoCo or the model is missing).
+
+| # | Test | Why it needs the real model | Pass condition |
+|---|---|---|---|
+| 10 | Reach sweep over every corner of the `LIMITS` box (x/y/z/roll/pitch/yaw combined) | Each axis can be in range while the combination is unreachable for the Stewart platform | Inverse kinematics solves; no self-collision |
+| 11 | Motor-level limits | Checks the 6 motor angles and their speeds, not just the head pose | Within the model's joint ranges and a speed limit |
+| 12 | Body turn | Target circles the robot | Body stays within its limit; ≤ 2 head/body direction changes per second |
+| 13 | End-to-end with faults | Real app code, real model | Rules 1–7 hold on sim motor positions; fallback within 500 ms; `policy_stale` logged |
+
+`face_sim_example.py` stays as the accuracy and behaviour demo. Its one planned change is to call `motion.clamp` instead of `np.clip`, so the demo goes through the app's limits.
+
+### 11.3 Layer 3: real robot only
+
+Sim can't model these, so the first real runs (§12.3 "Supervised") cover them:
+- motor temperature and current during a 10-minute soak;
+- cable strain from body turns;
+- real motor lag and overshoot;
+- bumping into nearby objects;
+- power or USB dropouts.
+
+Start at half limits with someone ready to cut power.
+
+Optional last guard: run the Layer 1 rule checks inside `set_pose` on the real robot too. Log and refuse any command that breaks a rule.
+
+### 11.4 Real-image replay simulator (accuracy, optional)
+
+For closed-loop tests on real images: record wide, still-camera videos of moving objects or faces. The "virtual head" is a crop that the policy moves around (using the warp from §8.1). This tests recovery and smoothness on real images without the robot. Ground truth comes from a detector on the full frame, so scores are approximate. Limited to the wide camera's field of view.
+
+### 11.5 Order of work
+
+1. Fix NaN in `clamp`; add a per-tick rate cap in `Motion._play`; reconcile limits with §12.2.
+2. Write Layer 1 tests 1–9.
+3. Switch `face_sim_example.py` to `motion.clamp`.
+4. Run the §5 "Sim" spike, then write Layer 2 tests 10–13.
 
 ---
 
@@ -522,7 +571,7 @@ If the camera alone takes most of the budget, reduce the frame size, or accept a
 
 ### 12.2 Safety
 
-Applied in the motion loop, so they hold whatever the policy outputs:
+Applied in the motion loop, so they hold whatever the policy outputs. **Not yet true of the code**: see §11.0 (NaN passes `clamp`, no rate cap, limits differ). Tested by §11.1–11.3.
 - Soft limits (head yaw ±60°, pitch −30°/+25°, roll ±20°, body yaw ±160°) and rate caps (head 120°/s, body 60°/s) from [04 §4](../architecture/04-motion-and-attention.md).
 - Action clamp ±20° and NaN rejection in `TrackBehaviour`.
 - Watchdog: no base target for 1 s → ease to neutral.

@@ -1,0 +1,10 @@
+[
+  {"id": "person_a", "phrasings": ["look at me", "follow my face", "keep looking at me", "nhìn tôi đi", "theo dõi mặt tôi"],
+   "specific": ["look at the person in the blue shirt", "follow the man with glasses", "track person A"]},
+  {"id": "person_b", "phrasings": ["look at me", "follow me", "keep your eyes on me", "nhìn theo tôi"],
+   "specific": ["follow the woman on the left", "look at the person in red", "track person B"]},
+  {"id": "person_c", "phrasings": ["look at me", "follow my face", "watch me"],
+   "specific": ["look at the taller person", "track person C"]},
+  {"id": "person_eval", "held_out": true, "phrasings": ["look at me", "follow my face"],
+   "specific": ["look at the person with the hat"]}
+]

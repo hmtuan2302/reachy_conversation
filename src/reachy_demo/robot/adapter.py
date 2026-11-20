@@ -172,6 +172,9 @@ class Robot:
     # or None. Blocks up to DOA_TIMEOUT_S.
     read_face: Callable[[], FaceReading | None]
     set_face_tracking: Callable[[bool], bool]  # daemon face detector on/off
+    # Measured pose (degrees, same axes as Pose: roll, pitch, yaw, body_yaw), the SDK's last
+    # cached reading; raises before the first one arrives.
+    read_pose: Callable[[], Pose]
 
 
 class LatestFrame:
@@ -254,6 +257,7 @@ def connect_robot(host: str, camera: bool = True) -> Iterator[Robot]:
     os.environ.setdefault("GST_PLUGIN_FEATURE_RANK", NO_NVDEC)
     from reachy_mini.reachy_mini import SLEEP_ANTENNAS_JOINT_POSITIONS, SLEEP_HEAD_POSE
     from reachy_mini.utils import create_head_pose
+    from reachy_mini.utils.rotation import Rotation
 
     def head(p: Pose) -> object:
         return create_head_pose(
@@ -278,6 +282,18 @@ def connect_robot(host: str, camera: bool = True) -> Iterator[Robot]:
             mini.set_target(
                 head=head(p), antennas=antennas(p), body_yaw=math.radians(p["body_yaw"])
             )
+
+        def read_pose() -> Pose:
+            roll, pitch, yaw = Rotation.from_matrix(mini.get_current_head_pose()[:3, :3]).as_euler(
+                "xyz", degrees=True
+            )
+            body = mini.get_current_joint_positions()[0][0]  # [verify] head joint 0 = body yaw
+            return {
+                "roll": float(roll),
+                "pitch": float(pitch),
+                "yaw": float(yaw),
+                "body_yaw": math.degrees(body),
+            }
 
         frames = LatestFrame(mini.media.get_frame)
         if has_camera:
@@ -317,6 +333,7 @@ def connect_robot(host: str, camera: bool = True) -> Iterator[Robot]:
                 doa_reader(host),
                 face_reader(host),
                 face_tracking_switch(host),
+                read_pose,
             )
         finally:
             with contextlib.suppress(OSError):  # a detector left on keeps using robot CPU

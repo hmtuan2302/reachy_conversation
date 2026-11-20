@@ -1,0 +1,10 @@
+[
+  {"id": "mug_white", "coco": "cup", "phrasings": ["track the white mug", "keep looking at the mug", "follow the white cup", "watch my mug"]},
+  {"id": "bottle_green", "coco": "bottle", "phrasings": ["track the green bottle", "follow the bottle", "keep your eyes on the green bottle"]},
+  {"id": "phone_black", "coco": "cell phone", "phrasings": ["track my phone", "follow the black phone", "watch the phone"]},
+  {"id": "ball_red", "coco": "sports ball", "phrasings": ["track the red ball", "follow the ball", "keep looking at the red ball"]},
+  {"id": "tape_blue", "coco": null, "phrasings": ["track the blue tape roll", "follow the tape", "watch the blue tape"]},
+  {"id": "duck_yellow", "coco": null, "phrasings": ["follow the rubber duck", "track the yellow duck", "keep looking at the duck"]},
+  {"id": "remote_tv", "coco": "remote", "held_out": true, "phrasings": ["track the remote", "follow the TV remote"]},
+  {"id": "stapler", "coco": null, "held_out": true, "phrasings": ["track the stapler", "follow the stapler"]}
+]

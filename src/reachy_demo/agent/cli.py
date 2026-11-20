@@ -38,6 +38,7 @@ from reachy_demo.agent.tools import owner as owner_tools
 from reachy_demo.agent.tools import sound as sound_tools
 from reachy_demo.agent.tools import voice as voice_tools
 from reachy_demo.attention.follow import Follow
+from reachy_demo.attention.hints import chasing, with_body
 from reachy_demo.attention.mimic import Mimic
 from reachy_demo.attention.search import Search
 from reachy_demo.audio.player import PlayerError
@@ -59,6 +60,7 @@ from reachy_demo.perception.objects import (
     BoxesDetector,
     ObjectDetector,
     ObjectSource,
+    PersonHeads,
     model_path,
 )
 from reachy_demo.perception.vision import ask_image_chat, ask_image_hf
@@ -518,12 +520,19 @@ def run(args: argparse.Namespace) -> int:
                 lag_s=lag_s,
             )
 
+            object_model = model_path(os.environ.get("OBJECT_MODEL", ""))
+            # No face in view: aim at a body's head (YOLOX person), or chase one that just left.
+            heads = PersonHeads(
+                robot.grab_frame, partial(ObjectDetector, object_model), lag_s=lag_s
+            )
+
             def face_switch(on: bool) -> bool:
                 if not on:
+                    heads.release()
                     return faces.switch(False)
                 return robot.has_camera and faces.begin("face")
 
-            follow = Follow(motion, faces.read, face_switch, sound)
+            follow = Follow(motion, chasing(with_body(faces.read, heads.read)), face_switch, sound)
             activities: dict[str, Callable[[], bool]] = {
                 "following the user": lambda: follow.active
             }
@@ -532,7 +541,6 @@ def run(args: argparse.Namespace) -> int:
             prompt += f" {track.PROMPT}"
             if robot.has_camera:
                 ask, label = vision_asker(vision, keys, base_url)
-                object_model = model_path(os.environ.get("OBJECT_MODEL", ""))
                 seen = ObjectSource(
                     robot.grab_frame, partial(ObjectDetector, object_model), ask, lag_s=lag_s
                 )

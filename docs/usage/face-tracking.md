@@ -25,7 +25,9 @@ Any spoken stop works, as for dances (see [agent.md § Interrupting](agent.md#in
 - **Camera delay**: each reading is matched to where the head was when the frame was taken (`CAMERA_LAG_S`, see [object-tracking.md § Camera delay](object-tracking.md#camera-delay-once-per-robot-and-wi-fi)). That keeps the head from swinging past you.
 - **Head and body**: the head turns alone up to 25° from the body, then the body turns too.
 - **Voice**: when you speak from somewhere it isn't looking, it turns toward your voice first, then finds your face there.
-- **Lost you**: the head holds where it last saw you. Your next sentence turns it toward your voice.
+- **Only your body in view** (back turned, face covered, or so close that your head is above the frame): YOLOX looks for a `person` and the head aims at the top of your body, tilting up when your body is cut off at the top edge. It only runs while no face is seen, and takes the body nearest where your face was.
+- **You left the frame**: if your face was lost at the edge, or while moving fast, the head keeps turning that way for 1.5 s to find you again. Lost in the middle of the frame (turned away, covered), it holds.
+- **Lost you**: after that, the head holds where it last saw you. Your next sentence turns it toward your voice.
 - **No camera**: if the face detector doesn't start, Reachy follows your voice only. After each sentence it turns toward your voice.
 - It follows for at most 30 minutes, then stops on its own.
 
@@ -71,6 +73,6 @@ If the blue box is on you but the head swings past you, `CAMERA_LAG_S` is off: m
 
 ## How it works (for developers)
 
-`attention/follow.py` runs tracking as one long move in the motion loop (`robot/motion.py`), like a dance, so stop ends it and other moves are refused. Face readings come from a `perception/objects.py` `ObjectSource` with the SDK's YuNet wrapped in `BoxesDetector` (`begin("face")`, wired in `agent/cli.py`). That is the same pipeline as object tracking. Each reading carries its frame time, and the offset is applied to the head pose of that moment (2 s history).
+`attention/follow.py` runs tracking as one long move in the motion loop (`robot/motion.py`), like a dance, so stop ends it and other moves are refused. Face readings come from a `perception/objects.py` `ObjectSource` with the SDK's YuNet wrapped in `BoxesDetector` (`begin("face")`, wired in `agent/cli.py`). That is the same pipeline as object tracking. Each reading carries its frame time, and the offset is applied to the head pose of that moment (2 s history). The face reader is wrapped by `attention/hints.py`: `with_body` falls back to `PersonHeads` (YOLOX `person`, the top of the box; loaded on first use, freed when tracking stops), and `chasing` keeps turning toward the side the face left by for `CHASE_S`. Both feed `Follow` ordinary readings (past ±1 means beyond the frame edge), so `Follow` itself is unchanged.
 
 Until 2026-11-18, face tracking used the daemon's own tracker (`steer_on_robot=True`, REST `/api/media/tracking/enable`), as the reference app does. That path is still in `Follow`, but nothing uses it now. It was rougher: its target only updates with each detection and has a +15° pitch trim. Object tracking on the laptop moved more smoothly.
